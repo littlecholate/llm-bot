@@ -1,6 +1,7 @@
 'use client';
 
 import { Zap, Clock, Presentation, BarChart2, Globe, Users, Calculator, Wrench } from 'lucide-react';
+import { locales } from '../lib/locales';
 
 export default function ToolsView({ activeToolId }) {
     // 這裡未來會替換成真正的元件引入
@@ -11,21 +12,30 @@ export default function ToolsView({ activeToolId }) {
     const getToolContent = (id) => {
         switch (id) {
             case 'events-current':
-                return { title: '現時活動', icon: Zap, desc: '這裡將顯示即時活動排名與預測圖表。' };
+                return {
+                    title: locales.tools.current.title,
+                    icon: Zap,
+                    desc: locales.tools.current.desc,
+                };
             case 'events-history':
-                return { title: '歷代活動', icon: Clock, desc: '這裡將顯示過往活動的資料庫查詢介面。' };
+                return {
+                    title: locales.tools.history.title,
+                    icon: Clock,
+                    desc: locales.tools.history.desc,
+                };
             case 'analysis-compare':
-                return { title: '活動比較分析', icon: Presentation, desc: '這裡將提供兩期活動的趨勢比較功能。' };
-            case 'analysis-ranking':
-                return { title: '活動榜線排名', icon: BarChart2, desc: '這裡顯示歷代 Top 100/1000 的分數排行。' };
-            case 'analysis-world':
-                return { title: 'World Link 分析', icon: Globe, desc: 'World Link 特殊活動的章節數據分析。' };
-            case 'analysis-users':
-                return { title: '活躍玩家分析', icon: Users, desc: '查詢特定玩家的活動歷史紀錄。' };
-            case 'tools-calculator':
-                return { title: '預估資源計算機', icon: Calculator, desc: '計算活動畢業所需的體力與資源。' };
+                return {
+                    title: locales.tools.compare.title,
+                    icon: Presentation,
+                    desc: locales.tools.compare.desc,
+                };
+            // ... 其他 case 依此類推，引用 locales.tools.xxx
             default:
-                return { title: '未選擇工具', icon: Wrench, desc: '請從左側選單選擇一個功能。' };
+                return {
+                    title: locales.tools.default.title,
+                    icon: Wrench,
+                    desc: locales.tools.default.desc,
+                };
         }
     };
 

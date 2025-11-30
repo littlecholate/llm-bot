@@ -1,42 +1,26 @@
 'use client';
 
-import { useState, useEffect } from 'react'; // 加入 useEffect
-import { X, ChevronRight, Languages, Heart, Check } from 'lucide-react';
+import { useState } from 'react';
+import { X, ChevronRight, Languages, Heart, Check, Trash2 } from 'lucide-react'; // 引入 Trash2 Icon
+import { useSettings } from '../context/SettingsContext';
+import { useChat } from '../context/ChatContext'; // 引入 useChat
+import { locales } from '../lib/locales';
+import { settingsConfig } from '../lib/config';
 
 export default function SettingsModal({ isOpen, onClose }) {
-    // 1. 初始化 State (給定預設值)
-    const [language, setLanguage] = useState('繁體中文 (台灣)');
-    const [favChar, setFavChar] = useState('初音未來');
+    const { language, character, updateSetting } = useSettings();
+    const { clearAllSessions } = useChat(); // 取得清空方法
 
     const [activeMenu, setActiveMenu] = useState(null);
 
-    // 2. [新增] 當元件掛載 (Mount) 時，從 localStorage 讀取設定
-    useEffect(() => {
-        // 檢查 window 是否存在 (避免 SSR 錯誤)
-        if (typeof window !== 'undefined') {
-            const savedLang = localStorage.getItem('hisekai_lang');
-            const savedChar = localStorage.getItem('hisekai_char');
-
-            if (savedLang) setLanguage(savedLang);
-            if (savedChar) setFavChar(savedChar);
-        }
-    }, []);
-
     if (!isOpen) return null;
 
-    const langOptions = ['繁體中文 (台灣)', 'English', '日本語'];
-    const charOptions = ['初音未來', '鏡音鈴', '鏡音連', '巡音流歌', 'MEIKO', 'KAITO'];
+    const langOptions = settingsConfig.languages;
+    const charOptions = settingsConfig.characters;
 
-    // 3. [修改] 處理選擇並寫入 localStorage
     const handleSelect = (type, value) => {
-        if (type === 'lang') {
-            setLanguage(value);
-            localStorage.setItem('hisekai_lang', value); // 寫入
-        }
-        if (type === 'char') {
-            setFavChar(value);
-            localStorage.setItem('hisekai_char', value); // 寫入
-        }
+        if (type === 'lang') updateSetting('language', value);
+        if (type === 'char') updateSetting('character', value);
         setActiveMenu(null);
     };
 
@@ -49,9 +33,15 @@ export default function SettingsModal({ isOpen, onClose }) {
         }
     };
 
+    // 處理清空並關閉視窗
+    const handleClearData = () => {
+        clearAllSessions();
+        // 選擇性：清空後是否要關閉設定視窗？通常不需要，讓使用者自己關閉
+    };
+
     return (
         <div
-            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm transition-opacity"
+            className="fixed inset-0 px-4 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm transition-opacity"
             onClick={handleBackdropClick}
         >
             <div
@@ -62,7 +52,7 @@ export default function SettingsModal({ isOpen, onClose }) {
                 }}
             >
                 <div className="flex items-center justify-between border-b border-[#2f2f2f] px-6 py-4">
-                    <h2 className="text-lg font-medium text-gray-100">設定</h2>
+                    <h2 className="text-lg font-medium text-gray-100">{locales.settings.title}</h2>
                     <button
                         onClick={onClose}
                         className="rounded-full p-1 text-gray-400 hover:bg-[#333] hover:text-white transition-colors"
@@ -72,10 +62,11 @@ export default function SettingsModal({ isOpen, onClose }) {
                 </div>
 
                 <div className="p-4 space-y-6">
+                    {/* 一般設定 */}
                     <div>
-                        <div className="px-2 mb-2 text-xs font-semibold text-gray-500">一般</div>
+                        <div className="px-2 mb-2 text-xs font-semibold text-gray-500">{locales.settings.sections.general}</div>
                         <div className="relative rounded-xl bg-[#2a2a2a]">
-                            {/* Language Item */}
+                            {/* Language */}
                             <div className="relative">
                                 <button
                                     onClick={(e) => {
@@ -86,14 +77,15 @@ export default function SettingsModal({ isOpen, onClose }) {
                                 >
                                     <div className="flex items-center gap-3">
                                         <Languages className="h-5 w-5 text-gray-400" />
-                                        <span className="text-sm font-medium text-gray-200">語言</span>
+                                        <span className="text-sm font-medium text-gray-200">
+                                            {locales.settings.labels.language}
+                                        </span>
                                     </div>
                                     <div className="flex items-center gap-2">
                                         <span className="text-sm text-gray-400">{language}</span>
                                         <ChevronRight className="h-4 w-4 text-gray-500" />
                                     </div>
                                 </button>
-
                                 {activeMenu === 'lang' && (
                                     <div className="absolute right-0 top-full z-50 mt-2 w-48 origin-top-right rounded-xl bg-[#333333] p-1 shadow-xl ring-1 ring-black/20 animate-in fade-in zoom-in-95 duration-100">
                                         {langOptions.map((opt) => (
@@ -113,7 +105,7 @@ export default function SettingsModal({ isOpen, onClose }) {
                                 )}
                             </div>
 
-                            {/* Character Item */}
+                            {/* Character */}
                             <div className="relative">
                                 <button
                                     onClick={(e) => {
@@ -124,14 +116,15 @@ export default function SettingsModal({ isOpen, onClose }) {
                                 >
                                     <div className="flex items-center gap-3">
                                         <Heart className="h-5 w-5 text-gray-400" />
-                                        <span className="text-sm font-medium text-gray-200">喜愛角色</span>
+                                        <span className="text-sm font-medium text-gray-200">
+                                            {locales.settings.labels.character}
+                                        </span>
                                     </div>
                                     <div className="flex items-center gap-2">
-                                        <span className="text-sm text-gray-400">{favChar}</span>
+                                        <span className="text-sm text-gray-400">{character}</span>
                                         <ChevronRight className="h-4 w-4 text-gray-500" />
                                     </div>
                                 </button>
-
                                 {activeMenu === 'char' && (
                                     <div className="absolute right-0 top-full z-50 mt-2 w-48 origin-top-right rounded-xl bg-[#333333] p-1 shadow-xl ring-1 ring-black/20 animate-in fade-in zoom-in-95 duration-100">
                                         {charOptions.map((opt) => (
@@ -144,7 +137,7 @@ export default function SettingsModal({ isOpen, onClose }) {
                                                 className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm text-gray-200 hover:bg-[#444444] transition-colors"
                                             >
                                                 <span>{opt}</span>
-                                                {favChar === opt && <Check className="h-4 w-4 text-white" />}
+                                                {character === opt && <Check className="h-4 w-4 text-white" />}
                                             </button>
                                         ))}
                                     </div>
@@ -153,11 +146,28 @@ export default function SettingsModal({ isOpen, onClose }) {
                         </div>
                     </div>
 
+                    {/* 資料管理 (新增區塊) */}
                     <div>
-                        <div className="px-2 mb-2 text-xs font-semibold text-gray-500">關於</div>
+                        <div className="px-2 mb-2 text-xs font-semibold text-gray-500">{locales.settings.sections.data}</div>
+                        <div className="rounded-xl bg-[#2a2a2a]">
+                            <button
+                                onClick={handleClearData}
+                                className="flex w-full items-center justify-between px-4 py-3.5 hover:bg-[#333] transition-colors rounded-xl text-red-400 hover:text-red-300"
+                            >
+                                <div className="flex items-center gap-3">
+                                    <Trash2 className="h-5 w-5" />
+                                    <span className="text-sm font-medium">{locales.settings.actions.clearAll}</span>
+                                </div>
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* 關於 */}
+                    <div>
+                        <div className="px-2 mb-2 text-xs font-semibold text-gray-500">{locales.settings.sections.about}</div>
                         <div className="rounded-xl bg-[#2a2a2a]">
                             <div className="flex items-center justify-between px-4 py-3.5 hover:bg-[#333] transition-colors cursor-default rounded-xl">
-                                <span className="text-sm font-medium text-gray-200">版本</span>
+                                <span className="text-sm font-medium text-gray-200">{locales.settings.labels.version}</span>
                                 <span className="text-sm text-gray-500">1.0.0 Beta</span>
                             </div>
                         </div>
