@@ -26,7 +26,7 @@ Mobile：自動收合為 Drawer，附帶遮罩與漢堡選單。
 
 歡迎畫面 (Welcome Screen)：當對話為空時，顯示置中的大標題與 Logo，不顯示對話氣泡。
 
-Prompt Box：膠囊型輸入框，整合了「清除對話 (垃圾桶)」與「送出」按鈕，支援 Enter 發送、Shift+Enter 換行。
+Prompt Box：膠囊型輸入框，「送出」按鈕，支援 Enter 發送、Shift+Enter 換行。
 
 3. 設定系統 (Settings)
    Modal 視窗：使用 Custom Popup 實作的設定頁面，非換頁式，體驗更流暢。

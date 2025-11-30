@@ -1,6 +1,6 @@
 'use client';
 
-import { Send, Trash2 } from 'lucide-react'; // 1. 引入 Trash2 Icon
+import { Send } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 export default function PromptBox({ input, setInput, onSubmit, onClear, disabled }) {
@@ -17,16 +17,6 @@ export default function PromptBox({ input, setInput, onSubmit, onClear, disabled
             <div className="mx-auto max-w-3xl px-4">
                 {/* 輸入框容器：保持單行膠囊樣式 */}
                 <div className="relative flex items-end gap-2 rounded-[26px] bg-[#2F2F2F] p-2 focus-within:ring-1 focus-within:ring-gray-500 transition-all">
-                    {/* 3. 新增: 清除按鈕 (位於左下) */}
-                    <button
-                        type="button" // 避免觸發 submit
-                        onClick={onClear}
-                        className="mb-1 ml-1 flex h-9 w-9 items-center justify-center rounded-full text-gray-400 hover:bg-red-900/30 hover:text-red-400 transition-colors"
-                        title="Clear conversation"
-                    >
-                        <Trash2 className="h-4 w-4" />
-                    </button>
-
                     {/* 輸入表單 (位於中間) */}
                     <form onSubmit={onSubmit} className="flex-1 min-w-0">
                         <textarea
