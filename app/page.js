@@ -1,65 +1,64 @@
-import Image from "next/image";
+'use client';
+
+import { useState } from 'react';
+import { ChatProvider } from '../context/ChatContext';
+import Sidebar from '../components/Sidebar';
+import MobileHeader from '../components/MobileHeader';
+import ChatWindow from '../components/ChatWindow';
+import ToolsView from '../components/ToolsView';
+import SettingsModal from '../components/SettingsModal';
 
 export default function Home() {
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.js file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
-  );
+    const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+    const [activeView, setActiveView] = useState('chat');
+
+    // 1. 新增: 追蹤目前選中的工具 ID
+    // 預設可以是 null，或者第一個工具的 ID (如 'events-current')
+    const [activeToolId, setActiveToolId] = useState(null);
+
+    const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+
+    // 2. 修改: 處理導航，接收 view 和 toolId
+    const handleNavigate = (view, toolId = null) => {
+        setActiveView(view);
+        if (view === 'tools' && toolId) {
+            setActiveToolId(toolId);
+        }
+    };
+
+    const renderContent = () => {
+        switch (activeView) {
+            case 'chat':
+                return <ChatWindow />;
+            case 'tools':
+                // 這裡可以將 activeToolId 傳給 ToolsView
+                // 未來 ToolsView 可以根據這個 ID 顯示不同的工具內容
+                return <ToolsView activeToolId={activeToolId} />;
+            default:
+                return <ChatWindow />;
+        }
+    };
+
+    return (
+        <ChatProvider>
+            <main className="flex h-screen w-full overflow-hidden bg-[#212121]">
+                <Sidebar
+                    isOpen={isSidebarOpen}
+                    onClose={() => setIsSidebarOpen(false)}
+                    currentView={activeView}
+                    activeToolId={activeToolId} // 3. 傳入 activeToolId
+                    onNavigate={handleNavigate} // 傳入新的導航函式
+                    onOpenSettings={() => setIsSettingsOpen(true)}
+                />
+
+                <div className="flex-1 flex flex-col h-full w-full relative">
+                    <MobileHeader onOpen={() => setIsSidebarOpen(true)} />
+
+                    {renderContent()}
+
+                    <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
+                </div>
+            </main>
+        </ChatProvider>
+    );
 }
