@@ -1,15 +1,15 @@
 'use client';
 
 import { useState } from 'react';
-import { X, ChevronRight, Languages, Heart, Check, Trash2 } from 'lucide-react'; // 引入 Trash2 Icon
+import { X, ChevronRight, Languages, Heart, Check, Trash2 } from 'lucide-react';
 import { useSettings } from '../context/SettingsContext';
-import { useChat } from '../context/ChatContext'; // 引入 useChat
+import { useChat } from '../context/ChatContext';
 import { locales } from '../lib/locales';
 import { settingsConfig } from '../lib/config';
 
 export default function SettingsModal({ isOpen, onClose }) {
     const { language, character, updateSetting } = useSettings();
-    const { clearAllSessions } = useChat(); // 取得清空方法
+    const { clearAllSessions } = useChat();
 
     const [activeMenu, setActiveMenu] = useState(null);
 
@@ -33,10 +33,8 @@ export default function SettingsModal({ isOpen, onClose }) {
         }
     };
 
-    // 處理清空並關閉視窗
     const handleClearData = () => {
         clearAllSessions();
-        // 選擇性：清空後是否要關閉設定視窗？通常不需要，讓使用者自己關閉
     };
 
     return (
@@ -175,7 +173,7 @@ export default function SettingsModal({ isOpen, onClose }) {
                 </div>
 
                 <div className="bg-[#1a1a1a] px-6 py-4 text-center text-xs text-gray-600 rounded-b-2xl">
-                    © 2024 Hisekai TW. All rights reserved.
+                    © 2025 Sekai Archive. All rights reserved.
                 </div>
             </div>
         </div>

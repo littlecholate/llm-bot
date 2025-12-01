@@ -7,13 +7,13 @@ import { locales } from '../lib/locales';
 import { useState, useCallback } from 'react';
 import { useChat } from '../context/ChatContext';
 import SessionList from './SessionList';
-import NavButton from './NavButton'; // [引入]
+import NavButton from './NavButton';
 
 export default function Sidebar({ isOpen, onClose, currentView, activeToolId, onNavigate, onOpenSettings }) {
     const { sessions, activeId, switchSession, prepareNewChat, deleteSession } = useChat();
 
     const [expandedSections, setExpandedSections] = useState({
-        [locales.nav.categories.home]: true, // 注意這裡也要用 locales 變數對應
+        [locales.nav.categories.home]: true,
         [locales.nav.categories.data]: true,
         [locales.nav.categories.chats]: true,
     });

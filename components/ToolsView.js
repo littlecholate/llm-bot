@@ -29,7 +29,6 @@ export default function ToolsView({ activeToolId }) {
                     icon: Presentation,
                     desc: locales.tools.compare.desc,
                 };
-            // ... 其他 case 依此類推，引用 locales.tools.xxx
             default:
                 return {
                     title: locales.tools.default.title,

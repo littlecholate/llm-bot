@@ -11,14 +11,9 @@ import SettingsModal from '../components/SettingsModal';
 export default function Home() {
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const [activeView, setActiveView] = useState('chat');
-
-    // 1. 新增: 追蹤目前選中的工具 ID
-    // 預設可以是 null，或者第一個工具的 ID (如 'events-current')
     const [activeToolId, setActiveToolId] = useState(null);
-
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
-    // 2. 修改: 處理導航，接收 view 和 toolId
     const handleNavigate = (view, toolId = null) => {
         setActiveView(view);
         if (view === 'tools' && toolId) {
@@ -26,6 +21,7 @@ export default function Home() {
         }
     };
 
+    // Render the content based on the active view
     const renderContent = () => {
         switch (activeView) {
             case 'chat':
@@ -46,8 +42,8 @@ export default function Home() {
                     isOpen={isSidebarOpen}
                     onClose={() => setIsSidebarOpen(false)}
                     currentView={activeView}
-                    activeToolId={activeToolId} // 3. 傳入 activeToolId
-                    onNavigate={handleNavigate} // 傳入新的導航函式
+                    activeToolId={activeToolId}
+                    onNavigate={handleNavigate}
                     onOpenSettings={() => setIsSettingsOpen(true)}
                 />
 

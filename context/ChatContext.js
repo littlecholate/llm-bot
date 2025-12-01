@@ -3,11 +3,11 @@
 import { createContext, useContext, useEffect, useCallback, useMemo, useReducer } from 'react';
 import { DEFAULT_MESSAGES } from '../lib/llm-config';
 import { locales } from '../lib/locales';
-import { chatReducer, initialState } from './chatReducer'; // [引入 Reducer]
+import { chatReducer, initialState } from './chatReducer';
 
 const ChatContext = createContext();
 
-const STORAGE_KEY = 'hisekai_chat_history';
+const STORAGE_KEY = 'sekaiArc_chat_history';
 const MAX_CHATS = 3;
 
 export function ChatProvider({ children }) {

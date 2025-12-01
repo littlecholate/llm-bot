@@ -4,7 +4,7 @@ import { useState } from 'react';
 import MessageList from './MessageList';
 import PromptBox from './PromptBox';
 import { useChat } from '../context/ChatContext';
-import { useLLM } from '../hooks/useLLM'; // 引入我們剛寫好的 Hook
+import { useLLM } from '../hooks/useLLM';
 
 export default function ChatWindow() {
     const [input, setInput] = useState('');

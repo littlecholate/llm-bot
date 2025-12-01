@@ -15,8 +15,7 @@ export function SettingsProvider({ children, initialSettings }) {
         if (key === 'character') setCharacter(value);
 
         // Client-side Cookie 設定 (簡單實作，max-age 設定為一年)
-        // 注意：這裡的 key 要對應 Server 端讀取的 key (hisekai_lang, hisekai_char)
-        const cookieKey = key === 'language' ? 'hisekai_lang' : 'hisekai_char';
+        const cookieKey = key === 'language' ? 'sekaiArc_lang' : 'sekaiArc_char';
         document.cookie = `${cookieKey}=${encodeURIComponent(value)}; path=/; max-age=31536000`;
 
         // 為了相容性，也可以同步寫入 localStorage (可選)

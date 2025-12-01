@@ -1,9 +1,8 @@
-// hooks/useLLM.js
 'use client';
 
 import { useState, useCallback } from 'react';
 import { useChat } from '../context/ChatContext';
-import { useSettings } from '../context/SettingsContext'; // 引入
+import { useSettings } from '../context/SettingsContext';
 import { generateSystemPrompt } from '../lib/llm-config';
 
 export function useLLM() {
@@ -28,6 +27,7 @@ export function useLLM() {
                     character, // 來自 Context
                 });
 
+                // Generate the system prompt  content using current language and character from context
                 const apiMessages = [
                     { role: 'system', content: systemPromptContent },
                     ...currentMessages.map((m) => ({ role: m.role, content: m.content })),
@@ -52,7 +52,7 @@ export function useLLM() {
             }
         },
         [addMessage, currentMessages, language, character]
-    ); // 加入依賴
+    );
 
     return { sendMessage, isLoading };
 }

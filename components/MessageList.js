@@ -1,20 +1,17 @@
 'use client';
 
-import { useEffect, useRef } from 'react'; // [新增] 引入 Hook
+import { useEffect, useRef } from 'react';
 import { Bot } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { siteConfig } from '../lib/config';
 
 export default function MessageList({ messages }) {
-    // [新增] 建立 Ref 來指向列表底部
     const bottomRef = useRef(null);
 
-    // [新增] 當 messages 變動時，自動平滑滾動到底部
     useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages]);
 
-    // 1. 當沒有訊息時，顯示置中的大標題歡迎頁面 (保持不變)
     if (!messages || messages.length === 0) {
         return (
             <div className="flex-1 flex flex-col items-center justify-center p-8 text-center animate-in fade-in zoom-in-95 duration-500">
@@ -31,7 +28,6 @@ export default function MessageList({ messages }) {
         );
     }
 
-    // 2. 當有訊息時，顯示一般的對話列表
     return (
         <div className="flex-1 overflow-y-auto p-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
             <div className="mx-auto max-w-3xl space-y-8 py-4">
@@ -62,7 +58,7 @@ export default function MessageList({ messages }) {
                     </div>
                 ))}
 
-                {/* [新增] 滾動錨點：確保它在列表的最後面 */}
+                {/* 滾動錨點：確保它在列表的最後面 */}
                 <div ref={bottomRef} />
             </div>
         </div>

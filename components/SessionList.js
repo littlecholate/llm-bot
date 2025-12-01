@@ -3,7 +3,7 @@
 import { memo } from 'react';
 import { MessageSquare, X } from 'lucide-react';
 import { cn } from '../lib/utils';
-import { locales } from '../lib/locales'; //
+import { locales } from '../lib/locales';
 
 const SessionList = memo(function SessionList({ sessions, activeId, currentView, onSelectSession, onDeleteSession }) {
     const sessionKeys = Object.keys(sessions);
@@ -14,7 +14,7 @@ const SessionList = memo(function SessionList({ sessions, activeId, currentView,
 
     // 將 sessions 物件轉為陣列並根據 updatedAt 排序 (雖然 Context 可能已經排序，但在 UI 層確保順序是好的習慣)
     // 這裡假設 sessions 已經是正確順序，或是我們直接遍歷
-    // 根據原程式碼逻辑：Object.values(sessions).map...
+    // 根據原程式碼：Object.values(sessions).map...
 
     return (
         <>
