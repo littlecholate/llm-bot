@@ -5,7 +5,7 @@ import { DEFAULT_MESSAGES } from '../lib/llm-config';
 import { locales } from '../lib/locales';
 import { chatReducer, initialState } from './chatReducer';
 
-const ChatContext = createContext();
+const ChatContext = createContext(); // just like building up the radio channel
 
 const STORAGE_KEY = 'sekaiArc_chat_history';
 const MAX_CHATS = 3;
@@ -16,13 +16,18 @@ export function ChatProvider({ children }) {
 
     // Auto-save logic
     useEffect(() => {
+        // 當網頁剛打開的 第一瞬間，React 會先使用預設值（空物件 {}）來初始化。這時候還沒來得及從硬碟 (LocalStorage) 讀取舊紀錄。
+        // 如果你沒有這個 if (isLoaded)，程式會誤以為「現在的紀錄是空的」，然後把空資料寫入硬碟，導致你 原本的舊紀錄被清空覆蓋掉。
         if (isLoaded) {
+            // LocalStorage 只能存文字 (String)，不能存 JavaScript 的物件 (Object)。
+            // 所以我們必須用 JSON.stringify 把整包 sessions 物件「打包」成一長串文字，才能塞進去。
             localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
         }
     }, [sessions, isLoaded]);
 
     // Init logic
     useEffect(() => {
+        // 「我現在是在使用者的瀏覽器上嗎？」如果是，才去讀檔
         if (typeof window !== 'undefined') {
             const saved = localStorage.getItem(STORAGE_KEY);
             let initialSessions = {};
@@ -32,6 +37,7 @@ export function ChatProvider({ children }) {
                 try {
                     const parsed = JSON.parse(saved);
                     initialSessions = parsed;
+                    // 如果有舊紀錄，程式就說：「好，那我們預設先幫使用者打開第一筆紀錄 (keys[0])。」
                     const keys = Object.keys(parsed);
                     if (keys.length > 0) {
                         initialActiveId = keys[0];
@@ -40,17 +46,18 @@ export function ChatProvider({ children }) {
                     console.error('LocalStorage parse error', e);
                 }
             }
+            // 此時資料還在 useEffect 手上，需要發送 INIT 來更新 State (setState)
             dispatch({
                 type: 'INIT',
                 payload: { sessions: initialSessions, activeId: initialActiveId },
             });
         }
-    }, []);
+    }, []); // <- Only execute one time
 
+    // Activate chatroom logic
     const prepareNewChat = useCallback(() => {
         dispatch({ type: 'PREPARE_NEW' });
     }, []);
-
     const switchSession = useCallback(
         (id) => {
             if (sessions[id]) {
@@ -80,17 +87,21 @@ export function ChatProvider({ children }) {
         }
     }, [activeId]);
 
+    // Delete chatroom logic
     const deleteSession = useCallback((e, id) => {
         e.stopPropagation();
         if (confirm(locales.nav.confirmDeleteSession)) {
             dispatch({ type: 'DELETE_SESSION', payload: id });
         }
     }, []);
-
     const clearAllSessions = useCallback(() => {
         if (confirm(locales.settings.actions.clearAllConfirm)) {
             dispatch({ type: 'CLEAR_ALL_SESSIONS' });
         }
+    }, []);
+
+    const updateStreamMessage = useCallback((content) => {
+        dispatch({ type: 'STREAM_UPDATE', payload: { content } });
     }, []);
 
     const currentMessages = useMemo(() => {
@@ -108,6 +119,7 @@ export function ChatProvider({ children }) {
             clearCurrentMessages,
             deleteSession,
             clearAllSessions,
+            updateStreamMessage,
             isLoaded,
         }),
         [
@@ -121,6 +133,7 @@ export function ChatProvider({ children }) {
             clearCurrentMessages,
             deleteSession,
             clearAllSessions,
+            updateStreamMessage,
         ]
     );
 

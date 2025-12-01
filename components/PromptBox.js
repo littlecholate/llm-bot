@@ -23,7 +23,7 @@ export default function PromptBox({ input, setInput, onSubmit, disabled }) {
                             placeholder="Enter your questions."
                             disabled={disabled}
                             rows={1}
-                            className="w-full resize-none bg-transparent ml-2 px-2 py-3 text-white placeholder-gray-500 focus:outline-none min-h-[44px] max-h-[200px] disabled:opacity-50 text-sm leading-relaxed overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
+                            className="w-full resize-none bg-transparent ml-2 px-2 py-3 text-white placeholder-gray-500 focus:outline-none min-h-11 max-h-[200px] disabled:opacity-50 text-sm leading-relaxed overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]"
                         />
                     </form>
 

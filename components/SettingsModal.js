@@ -39,7 +39,7 @@ export default function SettingsModal({ isOpen, onClose }) {
 
     return (
         <div
-            className="fixed inset-0 px-4 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm transition-opacity"
+            className="fixed inset-0 px-4 z-100 flex items-center justify-center bg-black/60 backdrop-blur-sm transition-opacity"
             onClick={handleBackdropClick}
         >
             <div

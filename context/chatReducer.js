@@ -1,4 +1,3 @@
-// context/chatReducer.js
 import { DEFAULT_MESSAGES } from '../lib/llm-config';
 
 export const initialState = {
@@ -7,6 +6,31 @@ export const initialState = {
     isLoaded: false,
 };
 
+/* Example
+{
+  "sessions": {
+    "1709251200000": {
+      "id": "1709251200000",
+      "title": "React 教學", 
+      "updatedAt": 1709251500000, // 時間變新了
+      "messages": [
+        { "role": "user", "content": "請教我怎麼用 React Hooks", ... },
+        { "role": "assistant", "content": "沒問題！我們從 useState 開始...", ... },
+        { 
+          "role": "user", 
+          "content": "我也想學 Vue", // 新增進來了！
+          "time": "上午 10:05:00"
+        }
+      ]
+    },
+    // ... 其他房間沒變
+  },
+  "activeId": "1709251200000",
+  "isLoaded": true
+}
+*/
+
+// Reducer is just like the rules book
 export function chatReducer(state, action) {
     switch (action.type) {
         case 'INIT':
@@ -27,7 +51,7 @@ export function chatReducer(state, action) {
             let targetSession = state.sessions[targetSessionId];
             let newState = { ...state };
 
-            // 1. 如果是新對話，先建立 Session 結構
+            // If it is new chat, build the session
             if (state.activeId === 'new') {
                 const newId = Date.now().toString();
                 targetSessionId = newId;
@@ -42,13 +66,12 @@ export function chatReducer(state, action) {
 
             if (!targetSession) return state;
 
-            // 2. 計算新標題
+            // Replace the chatroom title by user's first chat
             let newTitle = targetSession.title;
             if (message.role === 'user' && newTitle === 'New Chat') {
                 newTitle = message.content.slice(0, 15) + (message.content.length > 15 ? '...' : '');
             }
 
-            // 3. 串接訊息
             const updatedSession = {
                 ...targetSession,
                 title: newTitle,
@@ -62,6 +85,34 @@ export function chatReducer(state, action) {
             };
 
             return newState;
+        }
+
+        case 'STREAM_UPDATE': {
+            const { content } = action.payload;
+            const targetSessionId = state.activeId;
+            const session = state.sessions[targetSessionId];
+
+            if (!session || session.messages.length === 0) return state;
+
+            const newMessages = [...session.messages];
+            const lastIndex = newMessages.length - 1;
+
+            // Copy and update last message
+            newMessages[lastIndex] = {
+                ...newMessages[lastIndex],
+                content: newMessages[lastIndex].content + content,
+            };
+
+            return {
+                ...state,
+                sessions: {
+                    ...state.sessions,
+                    [targetSessionId]: {
+                        ...session,
+                        messages: newMessages,
+                    },
+                },
+            };
         }
 
         case 'DELETE_SESSION':

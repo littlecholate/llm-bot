@@ -35,9 +35,9 @@ export default function MessageList({ messages }) {
                     <div key={i} className={cn('flex w-full gap-4', m.role === 'user' ? 'justify-end' : 'justify-start')}>
                         {/* Bot Icon */}
                         {m.role === 'assistant' && (
-                            <div className="flex-shrink-0 mt-1">
-                                <div className="h-8 w-8 rounded border border-white/10 flex items-center justify-center bg-[#212121]">
-                                    <Bot className="h-5 w-5 text-white" />
+                            <div className="shrink-0 mt-1">
+                                <div className="h-10 w-10 rounded border border-white/10 flex items-center justify-center bg-[#212121]">
+                                    <Bot className="h-8 w-8 text-white" />
                                 </div>
                             </div>
                         )}
@@ -46,7 +46,7 @@ export default function MessageList({ messages }) {
                         <div className={cn('flex flex-col max-w-[80%]', m.role === 'user' ? 'items-end' : 'items-start')}>
                             <div
                                 className={cn(
-                                    'rounded-xl px-4 py-3 text-[15px] leading-7 shadow-sm',
+                                    'rounded-xl px-4 py-3 text-[15px] leading-7',
                                     m.role === 'user' ? 'bg-[#3F3F46] text-white' : 'bg-transparent text-gray-100 px-0 py-0'
                                 )}
                             >
