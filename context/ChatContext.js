@@ -80,6 +80,10 @@ export function ChatProvider({ children }) {
         [activeId, sessions]
     );
 
+    const deleteLastMessage = useCallback(() => {
+        dispatch({ type: 'DELETE_LAST_MESSAGE' });
+    }, []);
+
     const clearCurrentMessages = useCallback(() => {
         if (activeId === 'new') return;
         if (confirm(locales.chat.confirmClear)) {
@@ -116,6 +120,7 @@ export function ChatProvider({ children }) {
             prepareNewChat,
             switchSession,
             addMessage,
+            deleteLastMessage,
             clearCurrentMessages,
             deleteSession,
             clearAllSessions,
@@ -130,6 +135,7 @@ export function ChatProvider({ children }) {
             prepareNewChat,
             switchSession,
             addMessage,
+            deleteLastMessage,
             clearCurrentMessages,
             deleteSession,
             clearAllSessions,

@@ -3,50 +3,25 @@
 import { useState, useRef, useCallback } from 'react';
 import { useChat } from '../context/ChatContext';
 import { useSettings } from '../context/SettingsContext';
-import { generateSystemPrompt } from '../lib/llm-config';
+import { generateSystemPrompt, generateApiPayload } from '../lib/llm-config';
 
+// 它的工作是「收集材料」。它負責去 React 的各個角落（Context, State）把資料抓過來。
 export function useLLM() {
     const [isLoading, setIsLoading] = useState(false);
 
     // 使用 useRef 來避免在串流過程中閉包變數未更新的問題 (雖然這裡主要依賴 Context 方法)
     const abortControllerRef = useRef(null);
 
-    const { addMessage, updateStreamMessage, currentMessages } = useChat();
-    // Get context from settings
+    const { addMessage, updateStreamMessage, currentMessages, deleteLastMessage } = useChat();
     const { language, character } = useSettings();
 
-    const sendMessage = useCallback(
-        async (inputContent) => {
-            if (!inputContent.trim()) return;
-
-            if (isLoading) return;
+    const streamResponse = useCallback(
+        async (apiMessages) => {
+            // Setting Loading and AbortController
             setIsLoading(true);
             abortControllerRef.current = new AbortController();
 
             try {
-                // Add user's message to chat window first
-                const userMsg = { role: 'user', content: inputContent, time: new Date().toLocaleTimeString() };
-                addMessage(userMsg);
-
-                // Generate the system prompt content using current language and character from context
-                const systemPromptContent = generateSystemPrompt({ language, character });
-
-                const apiMessages = [
-                    { role: 'system', content: systemPromptContent },
-                    ...currentMessages.map((m) => ({ role: m.role, content: m.content })),
-                    { role: 'user', content: inputContent },
-                ];
-
-                // Create an empty Assistant message in the UI and prepare to receive the stream
-                // This way the UI will display a typing bubble
-                addMessage({
-                    role: 'assistant',
-                    content: '',
-                    time: new Date().toLocaleTimeString(),
-                });
-
-                console.log('🚀 [useLLM] Sending to API with settings:', { language, character });
-
                 const response = await fetch('/api/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -54,11 +29,8 @@ export function useLLM() {
                     signal: abortControllerRef.current.signal,
                 });
 
-                if (!response.ok) {
-                    throw new Error(response.statusText);
-                }
+                if (!response.ok) throw new Error(response.statusText);
 
-                // Deal with streaming data (Native Streams API)
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
                 let done = false;
@@ -66,29 +38,50 @@ export function useLLM() {
                 while (!done) {
                     const { value, done: doneReading } = await reader.read();
                     done = doneReading;
-
                     if (value) {
                         const chunkValue = decoder.decode(value, { stream: true });
                         updateStreamMessage(chunkValue);
                     }
                 }
             } catch (err) {
-                if (err.name === 'AbortError') {
-                    console.log('Stream stopped by user');
-                } else {
-                    console.error('[useLLM Error]', err);
+                if (err.name !== 'AbortError') {
+                    console.error('[streamResponse Error]', err);
                     updateStreamMessage(`\n\n[系統錯誤]: ${err.message}`);
                 }
             } finally {
+                // 統一在這裡關閉 Loading
                 setIsLoading(false);
                 abortControllerRef.current = null;
             }
         },
-        [addMessage, updateStreamMessage, currentMessages, language, character, isLoading]
+        [updateStreamMessage]
+    );
+
+    const sendMessage = useCallback(
+        async (inputContent) => {
+            if (!inputContent.trim() || isLoading) return;
+
+            // Add user's message to chat window first
+            addMessage({ role: 'user', content: inputContent, time: new Date().toLocaleTimeString() });
+            // Create an empty Assistant message in the UI and prepare to receive the stream
+            addMessage({ role: 'assistant', content: '', time: new Date().toLocaleTimeString() });
+
+            // Generate the system prompt content using current language and character from context
+            const systemPrompt = generateSystemPrompt({ language, character });
+            const apiMessages = generateApiPayload({
+                history: currentMessages, // 這裡的 currentMessages 還沒包含最新的 userMsg，剛好符合需求
+                userInput: inputContent,
+                systemPrompt: systemPrompt,
+                // 未來要加 RAG 只要多傳一個: context: retrievedData
+            });
+
+            await streamResponse(apiMessages);
+        },
+        [addMessage, currentMessages, streamResponse, language, character, isLoading]
     );
 
     // 提供一個停止生成的方法 (Optional)
-    const stopGeneration = useCallback(() => {
+    const stopGenerate = useCallback(() => {
         if (abortControllerRef.current) {
             abortControllerRef.current.abort();
             abortControllerRef.current = null;
@@ -96,5 +89,28 @@ export function useLLM() {
         }
     }, []);
 
-    return { sendMessage, stopGeneration, isLoading };
+    const regenerate = useCallback(async () => {
+        if (isLoading || currentMessages.length === 0) return;
+
+        // 邏輯：拿目前的紀錄，去掉最後一則，不需要等 React 更新 State
+        const historyForApi = currentMessages.slice(0, -1);
+
+        // UI 動作：刪除最後一則舊訊息
+        deleteLastMessage();
+
+        // UI 動作：馬上補一個空的 Assistant 訊息 (讓串流有地方寫入)
+        addMessage({ role: 'assistant', content: '', time: new Date().toLocaleTimeString() });
+
+        const systemPrompt = generateSystemPrompt({ language, character });
+        const apiMessages = generateApiPayload({
+            history: historyForApi,
+            userInput: null,
+            systemPrompt: systemPrompt,
+            // 未來要加 RAG 只要多傳一個: context: retrievedData
+        });
+
+        await streamResponse(apiMessages);
+    }, [isLoading, currentMessages, addMessage, deleteLastMessage, streamResponse, language, character]);
+
+    return { sendMessage, stopGenerate, isLoading, regenerate };
 }

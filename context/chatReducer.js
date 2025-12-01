@@ -40,8 +40,10 @@ export function chatReducer(state, action) {
                 activeId: action.payload.activeId,
                 isLoaded: true,
             };
+
         case 'SET_ACTIVE':
             return { ...state, activeId: action.payload };
+
         case 'PREPARE_NEW':
             return { ...state, activeId: 'new' };
 
@@ -114,6 +116,27 @@ export function chatReducer(state, action) {
                 },
             };
         }
+
+        case 'DELETE_LAST_MESSAGE':
+            const targetSessionId = state.activeId;
+            const session = state.sessions[targetSessionId];
+
+            if (!session || session.messages.length === 0) return state;
+
+            const newMessages = [...session.messages];
+            newMessages.pop();
+
+            return {
+                ...state,
+                sessions: {
+                    ...state.sessions,
+                    [targetSessionId]: {
+                        ...session,
+                        messages: newMessages,
+                        updatedAt: Date.now(),
+                    },
+                },
+            };
 
         case 'DELETE_SESSION':
             const newSessions = { ...state.sessions };

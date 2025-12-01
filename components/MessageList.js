@@ -1,12 +1,14 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { Bot } from 'lucide-react';
+import { Bot, RefreshCw } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { siteConfig } from '../lib/config';
+import { useLLM } from '../hooks/useLLM';
 
 export default function MessageList({ messages }) {
     const bottomRef = useRef(null);
+    const { regenerate, isLoading } = useLLM();
 
     useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -31,32 +33,58 @@ export default function MessageList({ messages }) {
     return (
         <div className="flex-1 overflow-y-auto p-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
             <div className="mx-auto max-w-3xl space-y-8 py-4">
-                {messages.map((m, i) => (
-                    <div key={i} className={cn('flex w-full gap-4', m.role === 'user' ? 'justify-end' : 'justify-start')}>
-                        {/* Bot Icon */}
-                        {m.role === 'assistant' && (
-                            <div className="shrink-0 mt-1">
-                                <div className="h-10 w-10 rounded border border-white/10 flex items-center justify-center bg-[#212121]">
-                                    <Bot className="h-8 w-8 text-white" />
+                {messages.map((m, i) => {
+                    const isLast = i === messages.length - 1;
+                    const isAssistant = m.role === 'assistant';
+
+                    return (
+                        <div
+                            key={i}
+                            className={cn('flex group w-full gap-4', m.role === 'user' ? 'justify-end' : 'justify-start')}
+                        >
+                            {/* Bot Icon */}
+                            {isAssistant && (
+                                <div className="shrink-0 mt-1">
+                                    <div className="h-8 w-8 rounded border border-white/10 flex items-center justify-center bg-[#212121]">
+                                        <Bot className="h-6 w-6 text-white" />
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Message Bubble */}
+                            <div className={cn('flex flex-col max-w-[80%]', m.role === 'user' ? 'items-end' : 'items-start')}>
+                                <div
+                                    className={cn(
+                                        'rounded-xl px-4 py-3 text-[16px] leading-7',
+                                        m.role === 'user' ? 'bg-[#3F3F46] text-white' : 'bg-transparent text-gray-100 px-0 py-0'
+                                    )}
+                                >
+                                    {m.content}
+                                </div>
+                                {/* Timestamp & Actions */}
+                                <div className="flex items-center gap-2 mt-1">
+                                    {m.time && <span className="text-xs text-gray-500">{m.time}</span>}
+
+                                    <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                        {isAssistant && isLast && (
+                                            <button
+                                                onClick={regenerate}
+                                                disabled={isLoading}
+                                                className={cn(
+                                                    'p-1.5 text-gray-500 hover:text-white transition-colors rounded-md hover:bg-[#3F3F46]',
+                                                    isLoading && 'animate-spin cursor-not-allowed'
+                                                )}
+                                                title="Regenerate"
+                                            >
+                                                <RefreshCw className="w-4 h-4" />
+                                            </button>
+                                        )}
+                                    </div>
                                 </div>
                             </div>
-                        )}
-
-                        {/* Message Bubble */}
-                        <div className={cn('flex flex-col max-w-[80%]', m.role === 'user' ? 'items-end' : 'items-start')}>
-                            <div
-                                className={cn(
-                                    'rounded-xl px-4 py-3 text-[15px] leading-7',
-                                    m.role === 'user' ? 'bg-[#3F3F46] text-white' : 'bg-transparent text-gray-100 px-0 py-0'
-                                )}
-                            >
-                                {m.content}
-                            </div>
-                            {/* Timestamp */}
-                            {m.time && <span className="mt-2 text-xs text-gray-500">{m.time}</span>}
                         </div>
-                    </div>
-                ))}
+                    );
+                })}
 
                 {/* 滾動錨點：確保它在列表的最後面 */}
                 <div ref={bottomRef} />
