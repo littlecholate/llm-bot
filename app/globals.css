@@ -1,4 +1,5 @@
 @import 'tailwindcss';
+@plugin "@tailwindcss/typography";
 
 /* Tailwind v4 會自動處理 base, components, utilities 的載入。
   如果您之後需要自定義 theme，也是透過 CSS 變數在這邊定義。

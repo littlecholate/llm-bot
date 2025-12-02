@@ -62,9 +62,9 @@ export function useLLM() {
             if (!inputContent.trim() || isLoading) return;
 
             // Add user's message to chat window first
-            addMessage({ role: 'user', content: inputContent, time: new Date().toLocaleTimeString() });
+            addMessage({ id: Date.now().toString(), role: 'user', content: inputContent, time: new Date().toLocaleTimeString() });
             // Create an empty Assistant message in the UI and prepare to receive the stream
-            addMessage({ role: 'assistant', content: '', time: new Date().toLocaleTimeString() });
+            addMessage({ id: Date.now().toString(), role: 'assistant', content: '', time: new Date().toLocaleTimeString() });
 
             // Generate the system prompt content using current language and character from context
             const systemPrompt = generateSystemPrompt({ language, character });
@@ -99,7 +99,7 @@ export function useLLM() {
         deleteLastMessage();
 
         // UI 動作：馬上補一個空的 Assistant 訊息 (讓串流有地方寫入)
-        addMessage({ role: 'assistant', content: '', time: new Date().toLocaleTimeString() });
+        addMessage({ id: Date.now().toString(), role: 'assistant', content: '', time: new Date().toLocaleTimeString() });
 
         const systemPrompt = generateSystemPrompt({ language, character });
         const apiMessages = generateApiPayload({

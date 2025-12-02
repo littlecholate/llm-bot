@@ -8,6 +8,7 @@ import { useState, useCallback } from 'react';
 import { useChat } from '../context/ChatContext';
 import SessionList from './SessionList';
 import NavButton from './NavButton';
+import StaticBanner from './StaticBanner';
 
 export default function Sidebar({ isOpen, onClose, currentView, activeToolId, onNavigate, onOpenSettings }) {
     const { sessions, activeId, switchSession, prepareNewChat, deleteSession } = useChat();
@@ -69,6 +70,11 @@ export default function Sidebar({ isOpen, onClose, currentView, activeToolId, on
                 </div>
 
                 <div className="flex-1 overflow-y-auto px-4 space-y-6 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+                    {/* Static Banner */}
+                    <div className="mb-6 mx-2">
+                        <StaticBanner />
+                    </div>
+
                     {navSections.map((section) => {
                         const isExpanded = expandedSections[section.category];
 

@@ -80,6 +80,10 @@ export function ChatProvider({ children }) {
         [activeId, sessions]
     );
 
+    const deleteMessage = useCallback((index) => {
+        dispatch({ type: 'DELETE_MESSAGE', payload: { index } });
+    }, []);
+
     const deleteLastMessage = useCallback(() => {
         dispatch({ type: 'DELETE_LAST_MESSAGE' });
     }, []);
@@ -120,6 +124,7 @@ export function ChatProvider({ children }) {
             prepareNewChat,
             switchSession,
             addMessage,
+            deleteMessage,
             deleteLastMessage,
             clearCurrentMessages,
             deleteSession,
@@ -135,6 +140,7 @@ export function ChatProvider({ children }) {
             prepareNewChat,
             switchSession,
             addMessage,
+            deleteMessage,
             deleteLastMessage,
             clearCurrentMessages,
             deleteSession,

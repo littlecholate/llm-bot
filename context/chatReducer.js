@@ -1,5 +1,7 @@
 import { DEFAULT_MESSAGES } from '../lib/llm-config';
 
+const generateId = () => Date.now().toString(36) + Math.random().toString(36).substr(2);
+
 export const initialState = {
     sessions: {},
     activeId: null, // 'new' or uuid
@@ -77,7 +79,7 @@ export function chatReducer(state, action) {
             const updatedSession = {
                 ...targetSession,
                 title: newTitle,
-                messages: [...targetSession.messages, message],
+                messages: [...targetSession.messages, { ...message, id: generateId() }],
                 updatedAt: Date.now(),
             };
 
@@ -117,7 +119,30 @@ export function chatReducer(state, action) {
             };
         }
 
-        case 'DELETE_LAST_MESSAGE':
+        case 'DELETE_MESSAGE': {
+            const { index } = action.payload;
+            const targetSessionId = state.activeId;
+            const session = state.sessions[targetSessionId];
+
+            if (!session || session.messages.length === 0) return state;
+
+            const newMessages = [...session.messages];
+            newMessages.splice(index, 1);
+
+            return {
+                ...state,
+                sessions: {
+                    ...state.sessions,
+                    [targetSessionId]: {
+                        ...session,
+                        messages: newMessages,
+                        updatedAt: Date.now(),
+                    },
+                },
+            };
+        }
+
+        case 'DELETE_LAST_MESSAGE': {
             const targetSessionId = state.activeId;
             const session = state.sessions[targetSessionId];
 
@@ -137,6 +162,7 @@ export function chatReducer(state, action) {
                     },
                 },
             };
+        }
 
         case 'DELETE_SESSION':
             const newSessions = { ...state.sessions };
