@@ -2,15 +2,13 @@
 
 import { useEffect, useRef } from 'react';
 import { useChat } from '../context/ChatContext';
-import { useLLM } from '../hooks/useLLM';
 import WelcomeScreen from './WelcomeScreen';
 import MessageBubble from './MessageBubble';
 
-export default function MessageList({ messages }) {
+export default function MessageList({ messages, isLoading, onRegenerate }) {
     const scrollContainerRef = useRef(null);
     const bottomRef = useRef(null);
     const { deleteMessage } = useChat();
-    const { regenerate, isLoading } = useLLM();
 
     // 用來追蹤使用者是否正在查看歷史訊息
     const shouldAutoScrollRef = useRef(true);
@@ -49,7 +47,7 @@ export default function MessageList({ messages }) {
                         message={m}
                         isLast={i === messages.length - 1}
                         isLoading={isLoading}
-                        onRegenerate={regenerate}
+                        onRegenerate={onRegenerate}
                         onDelete={() => deleteMessage(i)}
                     />
                 ))}

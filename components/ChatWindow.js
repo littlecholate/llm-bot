@@ -13,7 +13,7 @@ export default function ChatWindow() {
     const { currentMessages, clearCurrentMessages } = useChat();
 
     // 從 Hook 取得邏輯 (發送功能與讀取狀態)
-    const { sendMessage, isLoading } = useLLM();
+    const { sendMessage, isLoading, regenerate } = useLLM();
 
     const handleSubmit = async (e) => {
         e?.preventDefault();
@@ -29,7 +29,7 @@ export default function ChatWindow() {
 
     return (
         <div className="flex h-full flex-1 flex-col relative bg-[#212121] text-gray-100 font-sans">
-            <MessageList messages={currentMessages} />
+            <MessageList messages={currentMessages} isLoading={isLoading} onRegenerate={regenerate} />
 
             {/* 這裡可以把 isLoading 傳進去 PromptBox 做 Loading 動畫或 Disable */}
             <PromptBox

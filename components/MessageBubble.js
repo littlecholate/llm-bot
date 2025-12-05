@@ -11,6 +11,8 @@ import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 function MessageBubble({ message, isLast, isLoading, onRegenerate, onDelete }) {
     const isAssistant = message.role === 'assistant';
 
+    const isThinking = isAssistant && isLast && isLoading && !message.content;
+
     return (
         <div className={cn('flex group w-full gap-4', !isAssistant ? 'justify-end' : 'justify-start')}>
             {/* Bot Icon */}
@@ -36,7 +38,13 @@ function MessageBubble({ message, isLast, isLoading, onRegenerate, onDelete }) {
                               )
                     )}
                 >
-                    {!isAssistant ? (
+                    {isThinking ? (
+                        <div className="flex items-center gap-1.5 h-7 px-2">
+                            <span className="h-2 w-2 rounded-full bg-gray-400 animate-bounce [animation-delay:-0.3s]"></span>
+                            <span className="h-2 w-2 rounded-full bg-gray-400 animate-bounce [animation-delay:-0.15s]"></span>
+                            <span className="h-2 w-2 rounded-full bg-gray-400 animate-bounce"></span>
+                        </div>
+                    ) : !isAssistant ? (
                         message.content
                     ) : (
                         <ReactMarkdown
@@ -87,29 +95,31 @@ function MessageBubble({ message, isLast, isLoading, onRegenerate, onDelete }) {
                 <div className="flex items-center gap-2 mt-1 px-1">
                     {message.time && <span className="text-xs text-gray-500">{message.time}</span>}
 
-                    <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
-                        {isAssistant && isLast && (
-                            <button
-                                onClick={onRegenerate}
-                                disabled={isLoading}
-                                className={cn(
-                                    'p-1.5 text-gray-500 hover:text-white transition-colors rounded-md hover:bg-[#3F3F46]',
-                                    isLoading && 'animate-spin cursor-not-allowed'
-                                )}
-                                title="Regenerate"
-                            >
-                                <RefreshCw className="w-4 h-4" />
-                            </button>
-                        )}
+                    {!isThinking && (
+                        <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
+                            {isAssistant && isLast && (
+                                <button
+                                    onClick={onRegenerate}
+                                    disabled={isLoading}
+                                    className={cn(
+                                        'p-1.5 text-gray-500 hover:text-white transition-colors rounded-md hover:bg-[#3F3F46]',
+                                        isLoading && 'animate-spin cursor-not-allowed'
+                                    )}
+                                    title="Regenerate"
+                                >
+                                    <RefreshCw className="w-4 h-4" />
+                                </button>
+                            )}
 
-                        <button
-                            onClick={onDelete}
-                            className="p-1.5 text-gray-500 hover:text-red-400 transition-colors rounded-md hover:bg-[#3F3F46]"
-                            title="Delete"
-                        >
-                            <Trash2 className="w-4 h-4" />
-                        </button>
-                    </div>
+                            <button
+                                onClick={onDelete}
+                                className="p-1.5 text-gray-500 hover:text-red-400 transition-colors rounded-md hover:bg-[#3F3F46]"
+                                title="Delete"
+                            >
+                                <Trash2 className="w-4 h-4" />
+                            </button>
+                        </div>
+                    )}
                 </div>
             </div>
         </div>
