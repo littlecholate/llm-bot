@@ -1,7 +1,7 @@
 import { OpenAI } from 'openai';
 import { NextResponse } from 'next/server';
 import { DebugLogger } from '../../../lib/debug-utils';
-import { getEventTop100, EVENT_TOOLS_DEF } from '../../../lib/tools/sekai-api';
+import { allToolDefinitions, toolImplementations } from '../../../lib/tools/registry';
 
 const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
@@ -9,31 +9,24 @@ const openai = new OpenAI({
 
 export const runtime = 'edge';
 
-const AVAILABLE_TOOLS = {
-    get_event_top100: getEventTop100,
-};
-
 export async function POST(req) {
     const logger = new DebugLogger('API/Chat');
     const startTotal = performance.now();
 
     try {
-        // --- 修改點 1: 這裡多解構一個 max_tokens 參數 ---
-        // 一般聊天室 (useLLM) 不會傳這個參數，所以會是 undefined
         const { messages, max_tokens } = await req.json();
 
         logger.log(`Received request with ${messages.length} messages`, 'info');
 
-        // 第一次呼叫 (Judge/Router)
+        // 1st Pass: Router & Tool Selection
         const runner = await openai.chat.completions.create({
             model: 'gpt-4o-mini',
             messages: messages,
-            tools: EVENT_TOOLS_DEF,
-            tool_choice: 'auto',
+            // 動態注入所有工具定義
+            tools: allToolDefinitions.length > 0 ? allToolDefinitions : undefined,
+            tool_choice: allToolDefinitions.length > 0 ? 'auto' : 'none',
             stream: true,
             stream_options: { include_usage: true },
-            // --- 修改點 2: 傳入限制 ---
-            // 如果前端沒傳 (undefined)，這裡就不會送出 max_tokens 欄位，OpenAI 就會使用預設最大值
             max_tokens: max_tokens || undefined,
         });
 
@@ -66,7 +59,6 @@ export async function POST(req) {
                                 }
                             });
                         }
-
                         if (chunk.usage) accumulatedUsage = chunk.usage;
                     }
 
@@ -74,22 +66,32 @@ export async function POST(req) {
                     if (toolCalls.length > 0) {
                         logger.log(`Tool usage detected: ${toolCalls.length} calls`, 'warn');
 
-                        // 插入工具呼叫紀錄
                         messages.push({
                             role: 'assistant',
                             content: null,
                             tool_calls: toolCalls,
                         });
 
-                        // 執行工具
                         for (const toolCall of toolCalls) {
                             const functionName = toolCall.function.name;
-                            const functionToCall = AVAILABLE_TOOLS[functionName];
+
+                            // 修改執行邏輯：從 toolImplementations Map 查找
+                            const functionToCall = toolImplementations[functionName];
+
+                            if (!functionToCall) {
+                                logger.log(`Tool ${functionName} not found in registry`, 'error');
+                                messages.push({
+                                    role: 'tool',
+                                    tool_call_id: toolCall.id,
+                                    name: functionName,
+                                    content: JSON.stringify({ error: `Tool ${functionName} is not implemented.` }),
+                                });
+                                continue;
+                            }
 
                             logger.time(`Tool_Exec_${functionName}`);
-                            let functionResponse = functionToCall
-                                ? await functionToCall()
-                                : JSON.stringify({ error: 'Tool not found' });
+                            // 若有參數需在此解析 JSON.parse(toolCall.function.arguments)
+                            const functionResponse = await functionToCall();
                             const duration = logger.timeEnd(`Tool_Exec_${functionName}`);
 
                             messages.push({
@@ -100,14 +102,12 @@ export async function POST(req) {
                             });
                         }
 
-                        // 第二次呼叫 (Final Generation)
+                        // 2nd Pass: Final Generation
                         const finalStream = await openai.chat.completions.create({
                             model: 'gpt-4o-mini',
                             messages: messages,
                             stream: true,
                             stream_options: { include_usage: true },
-                            // --- 修改點 3: 這裡也要傳入限制 ---
-                            // 這是最重要的，因為這裡才是生成最終長文的地方
                             max_tokens: max_tokens || undefined,
                         });
 
@@ -117,7 +117,6 @@ export async function POST(req) {
                                 controller.enqueue(encoder.encode(content));
                             }
                             if (chunk.usage) {
-                                // 加總兩次呼叫的 Token (粗略計算)
                                 if (accumulatedUsage) {
                                     accumulatedUsage.total_tokens += chunk.usage.total_tokens;
                                     accumulatedUsage.prompt_tokens += chunk.usage.prompt_tokens;
@@ -129,15 +128,11 @@ export async function POST(req) {
                         }
                     }
                 } catch (err) {
-                    console.error('Stream Process Error:', err); // 讓你在後端終端機看到真實錯誤
-                    // 嘗試發送一個錯誤訊息給前端，而不是直接斷線 (若 controller 尚未 close)
+                    console.error('Stream Process Error:', err);
                     try {
                         const encoder = new TextEncoder();
                         controller.enqueue(encoder.encode(`\n\n[系統錯誤: ${err.message}]`));
-                    } catch (e) {
-                        /* ignore */
-                    }
-
+                    } catch (e) {}
                     controller.error(err);
                 } finally {
                     const duration = (performance.now() - startTotal).toFixed(0);

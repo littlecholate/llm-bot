@@ -9,39 +9,19 @@ import { cn } from '../../lib/utils';
 import PromptBox from '../PromptBox';
 import WarningModal from '../WarningModal';
 
+// --- Prompt Engine 引入 ---
+import { PromptEngine } from '../../lib/prompts/engine';
+import { RANKING_INSTRUCTIONS } from '../../lib/prompts/tools/ranking';
+
 // --- 1. 記憶體暫存區 (Module-Level Variable) ---
 // 這個變數在「切換分頁」時會保留，但在「瀏覽器重新整理」時會重置
 let memoryCards = [];
 
 const MAX_INPUT_CHARS = 100;
 
-const RANKING_SYSTEM_PROMPT = `
-你是 Sekai Archive 的即時榜線分析師。
-你的任務是根據提供的 Tool Data (Top 100 完整列表) 回答使用者的排名查詢。
-
-# 核心原則
-1. **直接給數據**：不要過多寒暄，直接用 Markdown 表格呈現。
-2. **邏輯推理修正**：
-   - 當使用者問 "**第 N 名往前 X 名**"，意指 **Rank (N-X) 到 Rank N**。
-   - 當使用者問 "**差距**" (Gap/Diff)，請計算分數差。
-
-# ⚠️ 輸出長度限制 (Output Control)
-請根據使用者查詢的 **「資料筆數」** 來決定顯示方式：
-
-1. **若查詢範圍超過 11 筆資料 (如 "Top 20", "前 100 名", "30到50名")**：
-   - **禁止** 完整列出所有資料。
-   - 請只列出該範圍的 **前 5 名**、**後 5 名**。
-   - 中間省略的部分請用一行 \`| ... | ... | ... | ... |\` 代替。
-   - **必須** 在表格下方委婉提醒：*"為確保版面整潔，針對超過 10 筆的查詢僅列出重點排名。如需完整數據，請縮小範圍 (例如一次查詢 10 名)。"*
-
-2. **若查詢範圍在 10 筆以內 (含 10 筆) (如 "前 10 名", "50到55名", "第88名")**：
-   - 請 **完整列出** 使用者要求的該區段所有數據，不要省略。
-
-# 表格格式
-| 排名 | 玩家 | 分數 | 時速 |
-| :--- | :--- | :--- | :--- |
-| ... | ... | ... | ... |
-`;
+// 這裡設定全域統一的顯示閾值
+// 只要資料超過 10 筆，就強制省略中間內容 (Top 5 + Bottom 5)
+const ROW_LIMIT_THRESHOLD = 10;
 
 export default function RankingView() {
     // 初始化 State：如果記憶體是空的，就塞入預設的「百位線」卡片
@@ -101,6 +81,19 @@ export default function RankingView() {
         }
     }, [cards.length, activeCardId, result]);
 
+    /**
+     * 輔助函式：動態組裝 System Prompt
+     * 使用 PromptEngine 將 Base Persona 與 Ranking Instructions 結合
+     * 並強制傳入 threshold: 10，確保 LLM 嚴格執行「前五後五」的省略規則
+     */
+    const buildSystemPrompt = () => {
+        return new PromptEngine()
+            .use(RANKING_INSTRUCTIONS, {
+                threshold: ROW_LIMIT_THRESHOLD, // 強制設定為 10，不依賴裝置寬度
+            })
+            .build();
+    };
+
     const handleQuery = async (queryText, titleOverride = null) => {
         if (isLoading) return;
 
@@ -151,7 +144,9 @@ export default function RankingView() {
         setCards((prev) => [...prev, newCard].slice(-10));
         setActiveCardId(newId);
 
-        generate(queryText, RANKING_SYSTEM_PROMPT);
+        // --- 使用 Prompt Engine 生成 Prompt ---
+        const systemPrompt = buildSystemPrompt();
+        generate(queryText, systemPrompt);
     };
 
     const handleManualSubmit = (e) => {
@@ -183,7 +178,10 @@ export default function RankingView() {
         });
 
         setActiveCardId(newId);
-        generate(card.prompt, RANKING_SYSTEM_PROMPT);
+
+        // --- 重新整理時也重新組裝 Prompt ---
+        const systemPrompt = buildSystemPrompt();
+        generate(card.prompt, systemPrompt);
     };
 
     const handleDeleteCard = (e, cardId) => {
