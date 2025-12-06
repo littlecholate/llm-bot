@@ -45,8 +45,13 @@ export function useLLM() {
                 }
             } catch (err) {
                 if (err.name !== 'AbortError') {
+                    let errorMsg = err.message;
+                    // 針對該錯誤顯示更友善的訊息
+                    if (errorMsg.includes('network error') || errorMsg.includes('chunked')) {
+                        errorMsg = '連線逾時或中斷，請稍後重試';
+                    }
                     console.error('[streamResponse Error]', err);
-                    updateStreamMessage(`\n\n[系統錯誤]: ${err.message}`);
+                    updateStreamMessage(`\n\n[系統錯誤]: ${errorMsg}`);
                 }
             } finally {
                 // 統一在這裡關閉 Loading
