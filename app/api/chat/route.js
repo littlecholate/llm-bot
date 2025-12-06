@@ -74,6 +74,7 @@ export async function POST(req) {
 
                         for (const toolCall of toolCalls) {
                             const functionName = toolCall.function.name;
+                            const functionArgs = toolCall.function.arguments;
 
                             // 修改執行邏輯：從 toolImplementations Map 查找
                             const functionToCall = toolImplementations[functionName];
@@ -89,10 +90,20 @@ export async function POST(req) {
                                 continue;
                             }
 
+                            logger.log(`👉 [Tool Input] ${functionName} Args: ${functionArgs}`, 'info');
                             logger.time(`Tool_Exec_${functionName}`);
                             // 若有參數需在此解析 JSON.parse(toolCall.function.arguments)
                             const functionResponse = await functionToCall();
                             const duration = logger.timeEnd(`Tool_Exec_${functionName}`);
+
+                            const previewResponse =
+                                typeof functionResponse === 'string'
+                                    ? functionResponse.length > 300
+                                        ? functionResponse.slice(0, 300) + '...'
+                                        : functionResponse
+                                    : JSON.stringify(functionResponse).slice(0, 300);
+
+                            logger.log(`👈 [Tool Output] ${functionName} Result: ${previewResponse}`, 'success');
 
                             messages.push({
                                 role: 'tool',
@@ -101,6 +112,15 @@ export async function POST(req) {
                                 content: functionResponse,
                             });
                         }
+                        // 這裡是用來確認 OpenAI 到底「看到了什麼」
+                        // [檢查點]：檢查是否被截斷
+                        // 印出最後 100 個字，確認結尾是否完整 (例如有沒有被截在 json 的一半)
+                        // logger.log(`📦 [2nd Pass Input Payload Check]`, 'warn');
+                        // logger.log(`   - Total Messages: ${messages.length}`, 'warn');
+
+                        // [檢查點]：檢查是否有「髒資料」
+                        // 有時候前面的 System Prompt 會被意外覆蓋，這裡簡單檢查一下第一則是不是 System
+                        // logger.log(`   - System Prompt Head: "${messages[0].content}"\n`, 'warn');
 
                         // 2nd Pass: Final Generation
                         const finalStream = await openai.chat.completions.create({

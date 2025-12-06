@@ -53,7 +53,7 @@ export async function POST(req) {
             ],
             response_format: { type: 'json_object' },
             temperature: 0,
-            max_tokens: 100,
+            max_tokens: 300,
         });
 
         const result = JSON.parse(completion.choices[0].message.content);
