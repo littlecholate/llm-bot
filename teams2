@@ -1,0 +1,133 @@
+import aiohttp
+import logging
+from typing import Optional, Dict, List, Any
+from datetime import datetime, timezone
+import dateutil.parser  # 需要安裝 python-dateutil，通常 msal 依賴已包含
+
+# 設定 Logger
+logger = logging.getLogger("GraphClient")
+
+class GraphAuthError(Exception):
+    pass
+
+class GraphClient:
+    def __init__(self, token: str):
+        self.base_url = "https://graph.microsoft.com/v1.0"
+        self.headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        self.user_id = None 
+
+    def update_token(self, new_token: str):
+        self.headers["Authorization"] = f"Bearer {new_token}"
+
+    async def _request(self, method: str, url: str, json_data: dict = None) -> Dict:
+        # 使用 ssl=False 解決內網憑證問題
+        connector = aiohttp.TCPConnector(ssl=False)
+        async with aiohttp.ClientSession(connector=connector) as session:
+            try:
+                async with session.request(method, url, headers=self.headers, json=json_data) as resp:
+                    if resp.status == 401:
+                        logger.warning("Graph API returned 401 Unauthorized.")
+                        raise GraphAuthError("Token expired or invalid.")
+                    
+                    if resp.status in (200, 201):
+                        return await resp.json()
+                    
+                    error_text = await resp.text()
+                    logger.error(f"Graph API Error [{resp.status}]: {error_text}")
+                    return {}
+            except aiohttp.ClientConnectorError as e:
+                logger.error(f"Network Error: {e}")
+                return {}
+
+    async def get_me(self) -> str:
+        if not self.user_id:
+            data = await self._request("GET", f"{self.base_url}/me")
+            self.user_id = data.get("id")
+        return self.user_id
+
+    async def get_recent_chats(self, limit: int = 10) -> List[Dict]:
+        """取得最近活躍的聊天室列表"""
+        url = f"{self.base_url}/me/chats?$expand=lastMessagePreview&$top={limit}&$sort=lastUpdatedDateTime desc"
+        data = await self._request("GET", url)
+        return data.get("value", [])
+
+    async def get_new_messages(self, chat_id: str, last_check_time: datetime) -> List[Dict]:
+        """
+        [修正版] 根據時間戳記取得新訊息
+        :param chat_id: 聊天室 ID
+        :param last_check_time: 上次檢查的時間 (datetime 物件，需含時區)
+        :return: 新訊息列表 (由舊到新排序)
+        """
+        # 抓取最近 20 則訊息 (通常 Polling 間隔短，20 則夠用)
+        url = f"{self.base_url}/me/chats/{chat_id}/messages?$top=20&$sort=lastModifiedDateTime desc"
+        
+        data = await self._request("GET", url)
+        raw_messages = data.get("value", [])
+        
+        new_messages = []
+        
+        # 確保 last_check_time 有時區資訊 (Azure 回傳的是 UTC)
+        if last_check_time.tzinfo is None:
+            last_check_time = last_check_time.replace(tzinfo=timezone.utc)
+
+        for msg in raw_messages:
+            # 1. 排除機器人自己的訊息
+            sender_id = msg.get("from", {}).get("user", {}).get("id")
+            if self.user_id and sender_id == self.user_id:
+                continue
+            
+            # 2. 解析訊息時間
+            created_str = msg.get("lastModifiedDateTime") # e.g. 2023-10-27T10:00:00Z
+            if not created_str:
+                continue
+                
+            msg_time = dateutil.parser.isoparse(created_str)
+            
+            # 3. 比較時間：只保留比 last_check_time 新的訊息
+            if msg_time > last_check_time:
+                new_messages.append(msg)
+
+        # Graph API 回傳是由新到舊，我們反轉為由舊到新 (方便對話處理)
+        new_messages.reverse()
+        return new_messages
+
+    async def send_reply(self, chat_id: str, content: str):
+        """發送 HTML 格式的回覆訊息"""
+        url = f"{self.base_url}/me/chats/{chat_id}/messages"
+        html_content = content.replace("\n", "<br>")
+        payload = {
+            "body": {
+                "contentType": "html",
+                "content": f"<div>{html_content}</div>"
+            }
+        }
+        await self._request("POST", url, json_data=payload)
+
+
+
+
+
+# 修改 test_graph.py 的部分程式碼
+from datetime import datetime, timedelta, timezone
+
+# ... 前面不變 ...
+
+    # 5. Get New Messages Test
+    # 模擬上次檢查時間是 "1 分鐘前"
+    last_check_time = datetime.now(timezone.utc) - timedelta(minutes=1)
+    
+    logger.info(f"[{bot_config['name']}] Checking for messages since {last_check_time}...")
+    
+    new_messages = await client.get_new_messages(chat_id, last_check_time)
+    
+    logger.info(f"[{bot_config['name']}] Found {len(new_messages)} new messages.")
+    
+    # 印出訊息內容確認
+    for msg in new_messages:
+        content = msg.get('body', {}).get('content', '')
+        print(f"   -> Msg: {content[:50]}...")
+
+# ... 後面不變 ...
