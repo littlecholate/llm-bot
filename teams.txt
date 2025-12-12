@@ -656,3 +656,31 @@ Bot 透過 Delta Query 抓到訊息。
 您的 Teams 會收到一則來自 Bot 的 "Hello! I am DevOps Bot..." 訊息。
 
 如果這步成功，代表我們的機器人已經具備「聽」與「說」的能力了！ 下一步我們將進入 Phase 3: Core Logic & Orchestrator，將這些零散的功能組裝成一個自動運轉的迴圈。
+
+
+
+
+# services/auth_manager.py
+import asyncio
+import logging
+import msal
+import requests # 新增這個 import
+from requests.packages.urllib3.exceptions import InsecureRequestWarning # 新增
+from configs.auth_config import AuthConfig
+
+# --- [新增區塊 Start] 暴力關閉 SSL 驗證 (針對 MSAL/Requests) ---
+# 1. 隱藏醜陋的 "Unverified HTTPS request" 警告
+requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+
+# 2. Monkey Patch: 強制將所有 requests session 的 verify 設為 False
+old_request = requests.Session.request
+def new_request(self, method, url, *args, **kwargs):
+    kwargs['verify'] = False
+    return old_request(self, method, url, *args, **kwargs)
+requests.Session.request = new_request
+# --- [新增區塊 End] ---
+
+logger = logging.getLogger("AuthManager")
+
+class AuthManager:
+    # ... (其餘程式碼保持不變) ...
