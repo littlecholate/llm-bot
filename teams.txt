@@ -684,3 +684,41 @@ logger = logging.getLogger("AuthManager")
 
 class AuthManager:
     # ... (其餘程式碼保持不變) ...
+
+
+
+
+# services/auth_manager.py
+# ... (imports 保持不變)
+
+class AuthManager:
+    def __init__(self, email: str, password: str):
+        self.email = email
+        self.password = password
+        self.scopes = AuthConfig.SCOPES
+        
+        # --- [修改 Start] 改用 ConfidentialClientApplication ---
+        self.app = msal.ConfidentialClientApplication(
+            client_id=AuthConfig.CLIENT_ID,
+            client_credential=AuthConfig.CLIENT_SECRET, # 這裡傳入 Secret
+            authority=AuthConfig.AUTHORITY_URL
+        )
+        # --- [修改 End] ---
+        
+        self._account = None
+
+    async def get_token_async(self) -> str:
+        # ... (Cache 邏輯保持不變) ...
+
+        # 2. Cache Miss -> 執行 ROPC 登入
+        logger.info(f"[{self.email}] No valid token in cache. Performing ROPC login...")
+        
+        result = await asyncio.to_thread(
+            self.app.acquire_token_by_username_password,
+            username=self.email,
+            password=self.password,
+            scopes=self.scopes
+        )
+        
+        # ... (後續處理保持不變)
+
