@@ -1,0 +1,658 @@
+# Role Definition
+
+你是一位資深的 Python 軟體架構師，專精於 Microsoft Graph API、AsyncIO 非同步編程以及企業級 Chatbot 開發。
+
+
+
+# Project Context
+
+我們要開發一個「企業內網版 Microsoft Teams 多重機器人系統 (Multi-Bot System)」。
+
+目標是部署在公司內網伺服器 (On-Premise)，不使用 Azure Bot Service，不開放防火牆 Inbound Port。
+
+每個部門 (HR, IT, DevOps) 會有一個獨立的 Bot 帳號，後端統一對接內部的 LLM 服務與外部工具 (Jira, etc.)。
+
+
+
+# Technical Stack & Constraints
+
+1.  **語言：** Python 3.10+
+
+2.  **核心框架：** `asyncio` + `aiohttp` (必須是完全非同步，禁止使用 requests 等同步庫造成阻塞)。
+
+3.  **通訊模式：** Microsoft Graph API Polling (輪詢模式) 搭配 Delta Query。
+
+4.  **驗證模式：** ROPC Flow (Resource Owner Password Credentials)，模擬服務帳號登入。
+
+5.  **部署環境：** Docker (未來)，目前先以 Python Script 執行。
+
+6.  **關鍵限制：** * 必須支援「多 Bot 同時輪詢」且互不阻塞。
+
+    * 必須支援「多使用者併發對話」，單一使用者的 LLM 生成等待時間不可卡住其他使用者。
+
+
+
+# Proposed Project Structure
+
+請嚴格遵守以下資料夾結構，這是參考現有 JS 專案轉換而來的模組化設計：
+
+
+
+teams-llm-bot/
+
+├── .env                     # 敏感資訊 (Client ID, Secrets, 帳號密碼, API Keys)
+
+├── requirements.txt         # 依賴套件 (aiohttp, msal, python-dotenv, etc.)
+
+├── main.py                  # [Entry Point] 程式入口 (負責初始化並 asyncio.gather 所有 Bot)
+
+├── configs/                 # [Configuration Layer]
+
+│   ├── __init__.py
+
+│   ├── bots_config.py       # 定義 Bot 清單 (帳號、密碼、對應的 Prompt 模組、啟用功能)
+
+│   ├── auth_config.py       # 通用 Graph API / Tenant 設定
+
+│   └── prompts/             # [Prompts Layer] 依照部門分類的系統提示詞
+
+│       ├── __init__.py
+
+│       ├── devops_prompt.py   # DevOps Bot 的 System Prompt
+
+│       ├── unittest_prompt.py # QA Bot 的 System Prompt
+
+│       └── hr_prompt.py       # HR Bot 的 System Prompt
+
+├── core/                    # [Core Logic Layer]
+
+│   ├── __init__.py
+
+│   ├── bot_instance.py      # 單一機器人的類別 (封裝 Polling Loop, Token Refresh, Task Creation)
+
+│   └── orchestrator.py      # (可選) 負責管理 Bot 生命週期的邏輯
+
+├── services/                # [Service Layer] 外部連線服務
+
+│   ├── __init__.py
+
+│   ├── auth_manager.py      # MSAL ROPC 登入與 Token 自動刷新邏輯
+
+│   ├── graph_client.py      # 封裝 Graph API (Get Delta Messages, Send Reply)
+
+│   ├── memory_store.py      # 簡單的對話紀錄儲存 (In-Memory dict 或 Redis)
+
+│   ├── llm_engine.py        # 統一呼叫後端 LLM 的介面
+
+│   └── tools/               # [Tools Layer] LLM 可呼叫的外部工具
+
+│       ├── __init__.py
+
+│       ├── jira_client.py     # Jira API 整合
+
+│       └── prosuite_client.py # 內部 ProSuite 工具整合
+
+└── utils/                   # 通用工具
+
+    ├── logger.py            # 統一 Log 格式: [時間] [Bot名稱] [ChatID] 訊息內容
+
+    └── helpers.py
+
+
+
+# Key Implementation Requirements (必須遵守的實作細節)
+
+1.  **Async Orchestration:** 在 `main.py` 中，必須能讀取 `bots_config.py` 列表，並為每一個 Bot 啟動一個獨立的 `run_forever()` 協程 (Coroutine)。
+
+2.  **Concurrency:** 在 `bot_instance.py` 收到新訊息時，必須使用 `asyncio.create_task()` 將訊息處理 (LLM + Tools) 丟入背景執行，確保 Polling Loop 能立刻處理下一則訊息。
+
+3.  **State Management:** 使用 `memory_store` 紀錄 conversation history，因為 Polling 是無狀態的。
+
+4.  **Delta Query:** `graph_client.py` 必須實作 `@odata.deltaLink` 的處理邏輯，只抓取新訊息，避免重複處理。
+
+5.  **Token Refresh:** `auth_manager.py` 需處理 Token 過期後的自動重登 (Re-login)。
+
+
+
+# Your Task
+
+請做為專案的技術 Lead，確認你理解以上需求。請先回答"我了解了"，我會再提供詳細步驟指示。
+
+
+
+
+我了解了。
+
+身為您的技術 Lead，我已完全掌握專案需求與架構細節。我們將打造一個高併發、純非同步 (Pure Async) 的企業級多重機器人系統。
+
+我特別注意到以下幾個關鍵技術點，這將是我們後續實作的重中之重：
+
+非阻塞核心 (Non-blocking Core): 嚴格確保 main.py 與 bot_instance.py 在 Polling 與處理訊息時，完全依賴 await 與 asyncio.create_task，絕不讓任何一個 Bot 因為網路 I/O 或 LLM 生成而卡住整個 Loop。
+
+狀態與差異同步 (State & Delta): graph_client.py 需精確處理 @odata.deltaLink，這是降低頻寬消耗與避免重複回覆的核心機制。
+
+身份驗證生命週期 (Auth Lifecycle): ROPC 模式下的 Token 壽命較短，auth_manager.py 必須具備無感知的自動刷新 (Silent Refresh) 機制，確保服務 24/7 不中斷。
+
+模組化設計: 您提供的資料夾結構非常清晰，利於未來擴充 (如新增部門 Bot 或切換 LLM 模型)。
+
+我已準備好開始執行。請提供您的詳細步驟指示，我們將逐步構建這個系統。
+
+
+
+
+🚀 階段一：專案初始化與基礎建設 (Config & Auth)
+
+目的： 先把地基打好，確保程式能讀到設定檔，並且能成功拿到 Graph API Token。這是最容易出錯的一步 (ROPC 驗證)。
+
+請注意，在建議基本環境時需用 uv，安裝套件時需用 uv add，執行時使用 uv run
+
+請注意，專案名稱需叫做 llm_teams_bot
+
+
+
+請先幫我實作 **Phase 1: 基礎配置與驗證模組**。
+
+我需要以下三個檔案的程式碼：
+
+
+
+1.  `configs/bots_config.py`: 請給我一個包含兩個範例 Bot (DevOps Bot, HR Bot) 的設定結構。
+
+2.  `configs/auth_config.py`: 定義 Tenant ID, Authority URL 等通用設定。
+
+3.  **`services/auth_manager.py` (重要)**:
+
+    * 請使用 `msal` 函式庫實作 ROPC 登入。
+
+    * 必須包含一個 `get_token(email, password)` 的非同步 (async) 或同步函式。
+
+    * **關鍵要求：** 需實作 Token 快取與檢查機制。如果 Token 還沒過期，直接回傳舊的；如果過期了，自動重新登入。
+
+
+
+請提供這三個檔案的完整程式碼，並告訴我如何寫一個簡單的 `test_auth.py` 來驗證我可以成功拿到 Token。
+
+
+
+
+這是一個非常好的起點。身為架構師，我必須強調：身份驗證模組 (Auth Manager) 是整個系統的心臟。如果這裡處理不好（例如 Token 過期導致崩潰，或是同步網路請求卡死 Event Loop），後面的高併發架構都是空談。
+
+以下是 Phase 1 的實作方案。我們將使用 Python 3.10+ 的 asyncio.to_thread 來將 MSAL 的同步 I/O 封裝為非同步操作，確保主執行緒不被阻塞。
+
+0. 環境建置 (使用 uv)
+首先，請在終端機執行以下指令來初始化專案與安裝依賴：
+
+Bash
+
+# 初始化專案
+uv init llm_teams_bot
+cd llm_teams_bot
+
+# 安裝核心依賴
+# msal: 微軟驗證庫
+# python-dotenv: 讀取 .env
+# aiohttp: 非同步 HTTP 請求 (後續使用)
+uv add msal python-dotenv aiohttp
+接著，請建立 .env 檔案，填入您的測試帳號資訊：
+
+Ini, TOML
+
+# .env
+AZURE_TENANT_ID=your_tenant_id_here
+AZURE_CLIENT_ID=your_client_id_here
+# 注意：Client Secret 在 ROPC Flow 通常不需要，除非是 Confidential Client，但在 ROPC 我們用 User/Pass
+DEVOPS_EMAIL=devops_bot@yourcompany.com
+DEVOPS_PASSWORD=your_password
+HR_EMAIL=hr_bot@yourcompany.com
+HR_PASSWORD=your_password
+1. configs/auth_config.py
+這個檔案負責集中管理 Azure AD 的常數設定，方便未來切換環境。
+
+Python
+
+# configs/auth_config.py
+import os
+from dotenv import load_dotenv
+
+# 載入環境變數
+load_dotenv()
+
+class AuthConfig:
+    # Azure AD Tenant 設定
+    TENANT_ID = os.getenv("AZURE_TENANT_ID")
+    CLIENT_ID = os.getenv("AZURE_CLIENT_ID")
+    
+    # 標準 Graph API Authority
+    AUTHORITY_URL = f"https://login.microsoftonline.com/{TENANT_ID}"
+    
+    # ROPC Flow 所需的權限範圍
+    # 注意：這些權限必須在 Azure Portal 的 App Registration 中預先開啟 "Grant admin consent"
+    SCOPES = [
+        "User.Read",
+        "Chat.Read",
+        "Chat.ReadWrite",
+        "Group.Read.All"
+    ]
+2. configs/bots_config.py
+這裡定義 Bot 的清單。我們使用字典結構，方便主程式透過 Loop 初始化多個 Bot 實例。
+
+Python
+
+# configs/bots_config.py
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# 定義每個 Bot 的設定
+BOTS_CONFIGURATION = [
+    {
+        "name": "DevOps Bot",
+        "id": "devops_bot",
+        "email": os.getenv("DEVOPS_EMAIL"),
+        "password": os.getenv("DEVOPS_PASSWORD"),
+        # 對應的 Prompt 模組名稱 (Phase 2 會用到)
+        "prompt_module": "devops_prompt", 
+        "enabled": True
+    },
+    {
+        "name": "HR Bot",
+        "id": "hr_bot",
+        "email": os.getenv("HR_EMAIL"),
+        "password": os.getenv("HR_PASSWORD"),
+        "prompt_module": "hr_prompt",
+        "enabled": True
+    }
+]
+3. services/auth_manager.py (核心模組)
+這是最關鍵的部分。MSAL 的 acquire_token_by_username_password 是同步 (Blocking) 的網路請求。為了符合您「完全非同步」的要求，我使用了 asyncio.to_thread 將其丟到執行緒池運行。
+
+Python
+
+# services/auth_manager.py
+import asyncio
+import logging
+import msal
+from configs.auth_config import AuthConfig
+
+# 設定簡單的 logger
+logger = logging.getLogger("AuthManager")
+
+class AuthManager:
+    def __init__(self, email: str, password: str):
+        self.email = email
+        self.password = password
+        self.scopes = AuthConfig.SCOPES
+        
+        # 初始化 MSAL Public Client
+        # ROPC 屬於 Public Client Flow (因為 Client 無法安全保存 Secret)
+        self.app = msal.PublicClientApplication(
+            client_id=AuthConfig.CLIENT_ID,
+            authority=AuthConfig.AUTHORITY_URL
+        )
+        
+        # 本地快取帳號物件 (用於 acquire_token_silent)
+        self._account = None
+
+    async def get_token_async(self) -> str:
+        """
+        非同步取得 Access Token。
+        優先嘗試從 Cache 靜默取得 (Silent)，若失敗則執行 ROPC 登入。
+        """
+        result = None
+
+        # 1. 嘗試從 Cache 讀取 Token (這部分通常很快，不需要 await，但為了統一介面保持 async)
+        accounts = self.app.get_accounts(username=self.email)
+        if accounts:
+            result = self.app.acquire_token_silent(self.scopes, account=accounts[0])
+
+        if result:
+            logger.debug(f"[{self.email}] Token retrieved from cache.")
+            return result['access_token']
+
+        # 2. Cache Miss 或 Token 過期 -> 執行 ROPC 登入
+        # 關鍵：將阻塞的 MSAL 網路請求丟到 Thread 執行，避免卡住 Main Loop
+        logger.info(f"[{self.email}] No valid token in cache. Performing ROPC login...")
+        
+        result = await asyncio.to_thread(
+            self.app.acquire_token_by_username_password,
+            username=self.email,
+            password=self.password,
+            scopes=self.scopes
+        )
+
+        if "access_token" in result:
+            logger.info(f"[{self.email}] ROPC Login successful.")
+            return result['access_token']
+        else:
+            # 處理登入失敗 (例如密碼錯誤、MFA 強制開啟等)
+            error_description = result.get("error_description", "Unknown error")
+            logger.error(f"[{self.email}] Login Failed: {error_description}")
+            raise Exception(f"Authentication failed for {self.email}: {error_description}")
+4. 驗證腳本：test_auth.py
+請在專案根目錄建立此檔案，用來驗證我們能否同時為兩個 Bot 拿到 Token。
+
+Python
+
+# test_auth.py
+import asyncio
+import logging
+from configs.bots_config import BOTS_CONFIGURATION
+from services.auth_manager import AuthManager
+
+# 設定 logging 顯示級別
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+async def test_single_bot_auth(bot_config):
+    """測試單一 Bot 的驗證流程"""
+    if not bot_config['enabled']:
+        return
+
+    print(f"--- Starting Auth for {bot_config['name']} ---")
+    
+    # 初始化 AuthManager
+    auth = AuthManager(bot_config['email'], bot_config['password'])
+    
+    try:
+        # 第一次拿 Token (應該會觸發 ROPC 登入)
+        token = await auth.get_token_async()
+        print(f"✅ {bot_config['name']}: Got Token! (Length: {len(token)})")
+        
+        # 模擬一下延遲
+        await asyncio.sleep(1)
+        
+        # 第二次拿 Token (應該會觸發 Cache Hit)
+        token_cached = await auth.get_token_async()
+        print(f"✅ {bot_config['name']}: Got Cached Token! (Length: {len(token_cached)})")
+        
+    except Exception as e:
+        print(f"❌ {bot_config['name']}: Auth Failed! Error: {e}")
+
+async def main():
+    # 同時測試所有 Bot，模擬並發啟動
+    tasks = [test_single_bot_auth(bot) for bot in BOTS_CONFIGURATION]
+    await asyncio.gather(*tasks)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+如何執行驗證
+請在終端機執行：
+
+Bash
+
+uv run test_auth.py
+預期結果
+如果設定正確，您應該會看到 DevOps Bot 和 HR Bot 幾乎同時開始登入，並且第一次顯示 Performing ROPC login，第二次顯示 Token retrieved from cache。
+
+下一步 (Lead 的建議)
+一旦您確認 test_auth.py 成功拿到 Token，我們就完成了最危險的外部依賴串接。
+
+接下來是 Phase 2: Graph API Client 與 Polling Loop。 我們將利用剛拿到的 Token，建立 GraphClient 並實作 get_delta_messages，這是讓 Bot 能「聽見」訊息的關鍵。
+
+您現在可以先執行測試。如果遇到 Azure AD 錯誤（如 AADSTS50076: MFA required），這通常是因為該帳號開啟了 MFA，ROPC 不支援 MFA，您可能需要請 IT 為這些服務帳號關閉 MFA 或設定條件式存取排除。
+
+請告訴我測試結果，我們再繼續。
+
+
+
+
+🧱 階段二：Graph API 連線層 (Polling & Sending)
+
+目的： 建立 Bot 的「耳朵 (Polling)」和「嘴巴 (Reply)」。這裡的重點是 Delta Query 的處理。
+
+Prompt 2:
+
+
+
+Markdown
+
+
+
+驗證成功，我已經可以拿到 Token 了。現在進入 **Phase 2: Graph API 服務層**。
+
+
+
+請幫我實作 `services/graph_client.py`。
+
+這個類別需要封裝所有對 Microsoft Graph 的 HTTP 請求，請嚴格遵守以下要求：1. **Async Only:** 必須使用 `aiohttp`，絕對不能用 `requests`。2. **方法需求:** * `get_delta_messages(user_id, next_link=None)`: 負責處理 Delta Query。如果回傳包含 `@odata.nextLink` 或 `@odata.deltaLink`，請正確處理回傳值以便下次呼叫使用。 * `send_reply(chat_id, content)`: 發送訊息回 Teams。3. **錯誤處理:** 如果遇到 401 (Unauthorized)，請拋出特定 Exception 讓上層知道需要 Refresh Token。4. **群組支援**: 機器人獲取訊息時需要能判斷來源是群組還是個人。
+
+
+
+大概完成後要有以下功能
+
+- can get the robot self id, use to prevent self-message
+
+- can get recent 10 chats room send to robot
+
+- can get current chat room last message
+
+- can send message back to user (echo is ok for testing), need to format to html content
+
+請提供完整程式碼，並簡單說明 Delta Query 在這裡的運作邏輯。
+
+太棒了，看到您成功拿到 Token，這代表我們已經跨過了最困難的驗證門檻。
+
+接下來是 Phase 2: Graph API 服務層。這一層是系統的「感官」，負責與 Microsoft Teams 進行高效的資料交換。
+
+關於您的需求，我特別設計了 GraphClient 類別，重點解決以下挑戰：
+
+Delta Query 狀態機處理：自動判斷是要繼續翻頁 (nextLink) 還是等待新訊息 (deltaLink)。
+
+自我過濾 (Self-Filter)：確保機器人不會回應自己發出的訊息（這會導致無窮迴圈）。
+
+HTML 格式化：Teams API 預設接收 HTML，我們需將純文字包裝好。
+
+以下是完整的實作程式碼：
+
+1. services/graph_client.py
+Python
+# services/graph_client.py
+import aiohttp
+import logging
+from typing import Optional, Dict, List, Any
+
+# 設定 Logger
+logger = logging.getLogger("GraphClient")
+
+class GraphAuthError(Exception):
+    """當 Graph API 回傳 401 時拋出的自定義錯誤"""
+    pass
+
+class GraphClient:
+    def __init__(self, token: str):
+        self.base_url = "https://graph.microsoft.com/v1.0"
+        self.headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        self.user_id = None  # 機器人自己的 User ID (用於過濾自我訊息)
+
+    def update_token(self, new_token: str):
+        """當 Token 刷新後，更新 Client 的 Header"""
+        self.headers["Authorization"] = f"Bearer {new_token}"
+
+    async def _request(self, method: str, url: str, json_data: dict = None) -> Dict:
+        """統一封裝 HTTP 請求，處理 401 錯誤"""
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.request(method, url, headers=self.headers, json=json_data) as resp:
+                    if resp.status == 401:
+                        logger.warning("Graph API returned 401 Unauthorized.")
+                        raise GraphAuthError("Token expired or invalid.")
+                    
+                    if resp.status in (200, 201):
+                        return await resp.json()
+                    
+                    # 處理其他錯誤 (如 400, 403, 500)
+                    error_text = await resp.text()
+                    logger.error(f"Graph API Error [{resp.status}]: {error_text}")
+                    return {}
+            except aiohttp.ClientConnectorError as e:
+                logger.error(f"Network Error: {e}")
+                return {}
+
+    async def get_me(self) -> str:
+        """取得並儲存機器人自己的 User ID"""
+        if not self.user_id:
+            data = await self._request("GET", f"{self.base_url}/me")
+            self.user_id = data.get("id")
+            logger.info(f"Bot initialized with User ID: {self.user_id}")
+        return self.user_id
+
+    async def get_recent_chats(self, limit: int = 10) -> List[Dict]:
+        """取得最近活躍的聊天室列表"""
+        url = f"{self.base_url}/me/chats?$expand=lastMessagePreview&$top={limit}&$sort=lastUpdatedDateTime desc"
+        data = await self._request("GET", url)
+        return data.get("value", [])
+
+    async def get_chat_last_message(self, chat_id: str) -> Optional[Dict]:
+        """取得特定聊天室的最後一則訊息 (一般用於初始化)"""
+        url = f"{self.base_url}/me/chats/{chat_id}/messages?$top=1"
+        data = await self._request("GET", url)
+        messages = data.get("value", [])
+        return messages[0] if messages else None
+
+    async def get_delta_messages(self, chat_id: str, next_or_delta_link: str = None) -> Dict[str, Any]:
+        """
+        核心功能：使用 Delta Query 取得新訊息
+        :param chat_id: 聊天室 ID
+        :param next_or_delta_link: 上次請求回傳的 @odata.nextLink 或 @odata.deltaLink
+        :return: { "messages": [], "next_link": str, "delta_link": str }
+        """
+        # 如果有 Link 就用 Link，沒有就建立初始 Delta 請求
+        if next_or_delta_link:
+            url = next_or_delta_link
+        else:
+            url = f"{self.base_url}/me/chats/{chat_id}/messages/delta"
+
+        data = await self._request("GET", url)
+        
+        messages = data.get("value", [])
+        
+        # 過濾掉機器人自己發出的訊息
+        filtered_messages = []
+        if self.user_id:
+            for msg in messages:
+                sender_id = msg.get("from", {}).get("user", {}).get("id")
+                if sender_id and sender_id != self.user_id:
+                    filtered_messages.append(msg)
+        
+        return {
+            "messages": filtered_messages,
+            "next_link": data.get("@odata.nextLink"),  # 若有此欄位，代表還沒抓完，需立刻再 call
+            "delta_link": data.get("@odata.deltaLink") # 若有此欄位，代表已抓完，存起來供下次 Polling 使用
+        }
+
+    async def send_reply(self, chat_id: str, content: str):
+        """發送 HTML 格式的回覆訊息"""
+        url = f"{self.base_url}/me/chats/{chat_id}/messages"
+        
+        # 簡單將換行轉為 <br>，確保顯示正常
+        html_content = content.replace("\n", "<br>")
+        
+        payload = {
+            "body": {
+                "contentType": "html",
+                "content": f"<div>{html_content}</div>"
+            }
+        }
+        
+        await self._request("POST", url, json_data=payload)
+2. Delta Query 邏輯解說
+Delta Query 是 Microsoft Graph 用來同步資料的高效機制。其運作邏輯如下圖：
+
+初始請求 (Full Sync / First Delta): 呼叫 /messages/delta。
+
+分頁處理 (@odata.nextLink): 如果訊息量大，API 不會一次回傳所有資料，而是給一個 nextLink。這時我們必須立刻用這個連結再呼叫一次，直到沒有 nextLink 為止。
+
+差異追蹤 (@odata.deltaLink): 當資料傳輸完畢，API 會給一個 deltaLink。這是一個「書籤」。
+
+輪詢 (Polling): 我們將 deltaLink 存入 Memory Store。過 5 秒鐘後，我們用這個 deltaLink 發送請求。
+
+如果沒有新訊息： API 回傳空列表 + 一個新的 deltaLink。
+
+如果有新訊息： API 回傳新訊息 + 一個新的 deltaLink。
+
+重點： 我們的 GraphClient 不負責儲存 Link，它只負責「執行請求並回傳結果」，Link 的儲存管理將由上一層 (bot_instance.py) 負責。
+
+3. 驗證腳本：test_graph.py
+這個腳本會模擬一個機器人流程：登入 -> 找聊天室 -> 聽新訊息 -> 回音測試。
+
+Python
+# test_graph.py
+import asyncio
+import logging
+from configs.bots_config import BOTS_CONFIGURATION
+from services.auth_manager import AuthManager
+from services.graph_client import GraphClient
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("TestGraph")
+
+async def test_bot_lifecycle(bot_config):
+    logger.info(f"--- Testing {bot_config['name']} ---")
+    
+    # 1. Auth: 取得 Token
+    auth = AuthManager(bot_config['email'], bot_config['password'])
+    token = await auth.get_token_async()
+    
+    # 2. Init Graph Client
+    client = GraphClient(token)
+    
+    # 3. Get Me (取得自己 ID)
+    my_id = await client.get_me()
+    logger.info(f"[{bot_config['name']}] My ID is: {my_id}")
+    
+    # 4. Get Recent Chats (取得最近 10 個聊天室)
+    chats = await client.get_recent_chats(limit=5)
+    logger.info(f"[{bot_config['name']}] Found {len(chats)} active chats.")
+    
+    if not chats:
+        logger.warning("No chats found. Please send a message to the bot first!")
+        return
+
+    # 選第一個聊天室來測試
+    target_chat = chats[0]
+    chat_id = target_chat['id']
+    topic = target_chat.get('topic') or target_chat.get('chatType')
+    logger.info(f"[{bot_config['name']}] Testing on Chat: {topic} ({chat_id})")
+
+    # 5. Delta Query Test (模擬一次 Polling)
+    # 注意：第一次 Delta Query 通常會回傳歷史訊息，我們這裡只簡單印出來
+    result = await client.get_delta_messages(chat_id)
+    new_messages = result['messages']
+    
+    logger.info(f"[{bot_config['name']}] Delta Query fetched {len(new_messages)} new messages.")
+    
+    # 6. Send Reply Test (回音測試)
+    # 我們發送一個簡單的問候
+    msg_content = f"Hello! I am {bot_config['name']}.<br>This is an automated connectivity test."
+    await client.send_reply(chat_id, msg_content)
+    logger.info(f"[{bot_config['name']}] Test reply sent successfully.")
+
+async def main():
+    # 為了測試方便，我們只測列表中的第一個 Bot，避免洗版
+    target_bot = BOTS_CONFIGURATION[0]
+    await test_bot_lifecycle(target_bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+如何測試
+請先用您的 Teams 帳號，傳送一則訊息給 DevOps Bot 的帳號 (確保它出現在最近對話列表)。
+
+執行測試：
+
+Bash
+uv run test_graph.py
+預期結果
+您應該會看到：
+
+Bot 成功登入並取得自己的 ID。
+
+Bot 找到聊天室列表。
+
+Bot 透過 Delta Query 抓到訊息。
+
+您的 Teams 會收到一則來自 Bot 的 "Hello! I am DevOps Bot..." 訊息。
+
+如果這步成功，代表我們的機器人已經具備「聽」與「說」的能力了！ 下一步我們將進入 Phase 3: Core Logic & Orchestrator，將這些零散的功能組裝成一個自動運轉的迴圈。
