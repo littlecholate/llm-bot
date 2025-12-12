@@ -223,3 +223,78 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+
+
+# main.py
+import asyncio
+import logging
+import sys
+from typing import List
+
+# 載入設定與核心類別
+from configs.bots_config import BOTS_CONFIGURATION
+from core.bot_instance import TeamsBot
+
+# --- 1. 全域 Log 設定 ---
+# 格式範例: 2023-10-27 10:00:00 [BotInstance.DevOps Bot] INFO: Received message...
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(name)s] %(levelname)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+
+logger = logging.getLogger("SystemEntry")
+
+async def main():
+    """
+    系統入口點：讀取設定 -> 初始化 Bots -> 併發執行
+    """
+    logger.info("--- Starting Multi-Bot System ---")
+
+    # 1. 篩選出啟用的 Bot 設定
+    active_configs = [cfg for cfg in BOTS_CONFIGURATION if cfg.get('enabled')]
+    
+    if not active_configs:
+        logger.error("No enabled bots found in bots_config.py! Exiting.")
+        return
+
+    logger.info(f"Found {len(active_configs)} enabled bots: {[c['name'] for c in active_configs]}")
+
+    # 2. 實例化所有 Bot
+    # 我們將每個 Bot 的 run_forever() 協程放入列表
+    bot_tasks = []
+    
+    for config in active_configs:
+        try:
+            bot = TeamsBot(config)
+            # 注意：這裡呼叫 run_forever() 但不加 await，而是收集回傳的 Coroutine 物件
+            bot_tasks.append(bot.run_forever())
+            logger.info(f"Bot instance created: {config['name']}")
+        except Exception as e:
+            logger.error(f"Failed to initialize bot {config['name']}: {e}")
+
+    # 3. 使用 asyncio.gather 同時啟動所有 Bot
+    # 這會讓所有 Bot 的 While Loop 平行運作，互不阻塞
+    logger.info(">>> All Bots Launched. Press Ctrl+C to stop. <<<")
+    
+    try:
+        await asyncio.gather(*bot_tasks)
+    except asyncio.CancelledError:
+        logger.info("Tasks cancelled. Shutting down...")
+    except Exception as e:
+        logger.error(f"Unexpected system crash: {e}", exc_info=True)
+
+if __name__ == "__main__":
+    try:
+        # 使用 asyncio.run 啟動主協程
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        # 捕捉 Ctrl+C，讓退出畫面乾淨一點
+        logger.info("\n--- System Shutdown Requested (KeyboardInterrupt) ---")
+        logger.info("Goodbye!")
+
+
