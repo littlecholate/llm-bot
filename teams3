@@ -1,0 +1,225 @@
+# services/memory_store.py
+import logging
+from datetime import datetime, timedelta, timezone
+from typing import Dict, List, Any
+
+logger = logging.getLogger("MemoryStore")
+
+class MemoryStore:
+    def __init__(self, session_timeout_minutes: int = 5):
+        # 結構: { chat_id: { "last_active": datetime, "history": [msg1, msg2...] } }
+        self._sessions: Dict[str, Dict[str, Any]] = {}
+        self.timeout_delta = timedelta(minutes=session_timeout_minutes)
+
+    def add_message(self, chat_id: str, role: str, content: str):
+        """
+        新增訊息到對話紀錄，並更新最後活躍時間
+        role: 'user' | 'assistant'
+        """
+        now = datetime.now(timezone.utc)
+        
+        if chat_id not in self._sessions:
+            logger.info(f"[{chat_id}] New session started.")
+            self._sessions[chat_id] = {
+                "last_active": now,
+                "history": []
+            }
+        
+        self._sessions[chat_id]["last_active"] = now
+        self._sessions[chat_id]["history"].append({
+            "role": role,
+            "content": content,
+            "timestamp": now.isoformat()
+        })
+
+    def get_history(self, chat_id: str) -> List[Dict]:
+        """取得特定 Chat 的完整對話紀錄"""
+        return self._sessions.get(chat_id, {}).get("history", [])
+
+    def cleanup_inactive_sessions(self):
+        """
+        檢查並清除閒置超過 5 分鐘的對話
+        此方法應由 Bot Main Loop 定期呼叫
+        """
+        now = datetime.now(timezone.utc)
+        expired_chats = []
+
+        for chat_id, session in self._sessions.items():
+            if now - session["last_active"] > self.timeout_delta:
+                expired_chats.append(chat_id)
+
+        for chat_id in expired_chats:
+            self._archive_and_clear(chat_id)
+
+    def _archive_and_clear(self, chat_id: str):
+        """(內部方法) 結算對話並清除記憶體"""
+        session = self._sessions.pop(chat_id)
+        history = session["history"]
+        
+        logger.info(f"--- [Session Timeout] Chat: {chat_id} ---")
+        logger.info(f"Total Messages: {len(history)}")
+        logger.info("Content Dump:")
+        for msg in history:
+            logger.info(f"   [{msg['role'].upper()}]: {msg['content']}")
+        logger.info("-------------------------------------------")
+
+
+
+
+
+# core/bot_instance.py
+import asyncio
+import logging
+from datetime import datetime, timezone, timedelta
+from typing import Dict
+
+from services.auth_manager import AuthManager
+from services.graph_client import GraphClient
+from services.memory_store import MemoryStore
+
+# 設定 Logger
+logging.basicConfig(level=logging.INFO)
+
+class TeamsBot:
+    def __init__(self, bot_config: Dict):
+        self.config = bot_config
+        self.name = bot_config['name']
+        self.logger = logging.getLogger(f"BotInstance.{self.name}")
+        
+        # 初始化服務
+        self.auth = AuthManager(bot_config['email'], bot_config['password'])
+        self.memory = MemoryStore(session_timeout_minutes=5)
+        
+        # Graph Client 需等待 run_forever 拿到 Token 後再初始化
+        self.client: GraphClient = None
+        
+        # 紀錄每個聊天室的「上次檢查時間」，避免重複抓取
+        # 格式: { chat_id: datetime }
+        self.chat_checkpoints: Dict[str, datetime] = {}
+        
+        # 用來控制 Loop 停止 (未來可用於優雅關閉)
+        self.is_running = False
+
+    async def initialize(self):
+        """初始化 Token 與 Graph Client"""
+        self.logger.info("Initializing authentication...")
+        token = await self.auth.get_token_async()
+        self.client = GraphClient(token)
+        
+        # 取得並顯示 Bot 自己的 ID
+        my_id = await self.client.get_me()
+        self.logger.info(f"Bot Ready. User ID: {my_id}")
+
+    async def process_message(self, chat_id: str, message: Dict):
+        """
+        [非同步任務] 處理單一訊息：紀錄 -> Mock LLM -> 回覆
+        注意：這裡的任何阻塞操作 (time.sleep) 都必須用 await asyncio.sleep
+        """
+        try:
+            user_content = message.get('body', {}).get('content', '')
+            # 簡單清洗 HTML tag (這只是粗略處理，實際專案建議用 BeautifulSoup)
+            # 這裡簡單把 <p> 等拿掉方便 Log
+            clean_content = user_content.replace('<p>', '').replace('</p>', '').strip()
+            
+            self.logger.info(f"Received from {chat_id}: {clean_content}")
+
+            # 1. 寫入記憶 (User)
+            self.memory.add_message(chat_id, "user", clean_content)
+
+            # 2. 模擬 LLM 思考 (Delay 2秒)
+            await asyncio.sleep(2)
+            
+            # 3. 建構回覆 (Mock Reply)
+            reply_content = f"[{self.name}] 收到：{clean_content}<br>我正在思考中... (Mock)"
+            
+            # 4. 寫入記憶 (Assistant)
+            self.memory.add_message(chat_id, "assistant", reply_content)
+
+            # 5. 發送回覆
+            await self.client.send_reply(chat_id, reply_content)
+            self.logger.info(f"Replied to {chat_id}")
+
+        except Exception as e:
+            self.logger.error(f"Error processing message in {chat_id}: {e}", exc_info=True)
+
+    async def run_forever(self):
+        """
+        機器人的主迴圈 (Polling Loop)
+        """
+        await self.initialize()
+        self.is_running = True
+        
+        self.logger.info("Starting Polling Loop...")
+
+        while self.is_running:
+            try:
+                # A. 定期檢查 Token 是否需要刷新
+                # (AuthManager 有 Cache 機制，這裡呼叫是安全的，不會每次都打 API)
+                token = await self.auth.get_token_async()
+                self.client.update_token(token)
+
+                # B. 取得最近活躍的聊天室
+                # 為了節省資源，我們只檢查最近 10 個有活動的聊天室
+                active_chats = await self.client.get_recent_chats(limit=10)
+                
+                now = datetime.now(timezone.utc)
+
+                for chat in active_chats:
+                    chat_id = chat['id']
+                    
+                    # 如果是第一次見到這個 Chat，將檢查時間設為「現在」
+                    # 這樣可以忽略機器人啟動前的歷史訊息
+                    if chat_id not in self.chat_checkpoints:
+                        self.chat_checkpoints[chat_id] = now
+                        continue
+                    
+                    last_check = self.chat_checkpoints[chat_id]
+                    
+                    # C. 抓取新訊息
+                    new_msgs = await self.client.get_new_messages(chat_id, last_check)
+                    
+                    if new_msgs:
+                        # 更新該 Chat 的檢查點為最新時間
+                        self.chat_checkpoints[chat_id] = now
+                        
+                        for msg in new_msgs:
+                            # D. 併發處理訊息 (Fire-and-forget)
+                            # 使用 create_task 確保不會因為處理訊息而卡住 Polling Loop
+                            asyncio.create_task(self.process_message(chat_id, msg))
+                
+                # E. 清理過期 Session
+                self.memory.cleanup_inactive_sessions()
+
+                # F. 喘口氣，避免 API Rate Limit
+                await asyncio.sleep(5)
+
+            except Exception as e:
+                self.logger.error(f"Global Loop Error: {e}")
+                # 遇到大錯先睡久一點再重試
+                await asyncio.sleep(10)
+
+
+
+
+
+import asyncio
+import logging
+from configs.bots_config import BOTS_CONFIGURATION
+from core.bot_instance import TeamsBot
+
+# 只啟用 DevOps Bot 進行測試
+target_config = BOTS_CONFIGURATION[0] 
+
+async def main():
+    bot = TeamsBot(target_config)
+    
+    print(f"--- Starting {bot.name} ---")
+    print("Press Ctrl+C to stop.")
+    
+    try:
+        await bot.run_forever()
+    except KeyboardInterrupt:
+        print("Stopping bot...")
+
+if __name__ == "__main__":
+    asyncio.run(main())
