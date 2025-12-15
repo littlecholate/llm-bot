@@ -1,0 +1,116 @@
+# services/memory_store.py
+import logging
+from datetime import datetime, timedelta, timezone
+from typing import Dict, List, Any, Optional
+
+logger = logging.getLogger("MemoryStore")
+
+class MemoryStore:
+    def __init__(self, session_timeout_minutes: int = 5):
+        # 結構: { chat_id: { "last_active": datetime, "history": [msg1, msg2...] } }
+        self._sessions: Dict[str, Dict[str, Any]] = {}
+        self.timeout_delta = timedelta(minutes=session_timeout_minutes)
+
+    def get_session(self, chat_id: str) -> Optional[Dict[str, Any]]:
+        """
+        [New] 取得目前的會話資訊。如果不存在則回傳 None。
+        """
+        return self._sessions.get(chat_id)
+
+    def create_session(self, chat_id: str):
+        """
+        [New] 建立一個新的會話空間 (Set Chat Info)
+        """
+        if chat_id not in self._sessions:
+            logger.info(f"[{chat_id}] Initializing new session container.")
+            self._sessions[chat_id] = {
+                "last_active": datetime.now(timezone.utc),
+                "history": []
+            }
+
+    def add_message(self, chat_id: str, role: str, content: str):
+        """
+        [Modified] 純粹負責新增訊息與更新時間。
+        注意：呼叫此方法前，外部應確保 session 已經透過 create_session 建立。
+        """
+        now = datetime.now(timezone.utc)
+        
+        # 安全防護：雖然外部應該要先 create，但這裡防呆一下
+        if chat_id not in self._sessions:
+            logger.warning(f"[{chat_id}] Session not found during add_message. Auto-creating.")
+            self.create_session(chat_id)
+        
+        # 更新最後活躍時間
+        self._sessions[chat_id]["last_active"] = now
+        
+        # 新增訊息
+        self._sessions[chat_id]["history"].append({
+            "role": role,
+            "content": content,
+            "timestamp": now.isoformat()
+        })
+
+    def get_history(self, chat_id: str) -> List[Dict]:
+        """取得特定 Chat 的完整對話紀錄"""
+        return self._sessions.get(chat_id, {}).get("history", [])
+
+    def pop_expired_sessions(self) -> Dict[str, List[Dict]]:
+        """檢查並『取出』過期的對話 (用於歸檔)"""
+        now = datetime.now(timezone.utc)
+        expired_chats = {}
+        active_ids = list(self._sessions.keys())
+
+        for chat_id in active_ids:
+            session = self._sessions[chat_id]
+            if now - session["last_active"] > self.timeout_delta:
+                expired_chats[chat_id] = session["history"]
+                del self._sessions[chat_id]
+        
+        return expired_chats
+
+
+
+
+
+# core/bot_instance.py (部分程式碼)
+
+    # ... (前面的 imports 與 __init__ 保持不變) ...
+
+    async def process_message(self, chat_id: str, message: Dict):
+        """
+        [修改版] 明確的會話管理流程
+        """
+        try:
+            body_data = message.get('body') or {}
+            user_content = body_data.get('content', '')
+            if not user_content:
+                return
+
+            clean_content = user_content.replace('<p>', '').replace('</p>', '').strip()
+            self.logger.info(f"Received from {chat_id}: {clean_content}")
+
+            # --- [Step 1: Check Chat Session Exist] ---
+            session = self.memory.get_session(chat_id)
+            
+            # --- [Step 2: Create Info if not exist] ---
+            if not session:
+                self.logger.info(f"No active session for {chat_id}. Creating new one.")
+                self.memory.create_session(chat_id)
+                # 這裡未來可以加入: 載入使用者偏好、檢查權限等邏輯
+            
+            # --- [Step 3: Add User Message] ---
+            self.memory.add_message(chat_id, "user", clean_content)
+
+            # 4. 呼叫 LLM Engine
+            history = self.memory.get_history(chat_id)
+            reply_content = await self.llm_engine.generate_response(history, self.system_prompt)
+            
+            # 5. 寫入記憶 (Assistant) & 發送回覆
+            self.memory.add_message(chat_id, "assistant", reply_content)
+            await self.client.send_reply(chat_id, reply_content)
+            self.logger.info(f"Replied to {chat_id}")
+
+        except Exception as e:
+            self.logger.error(f"Error processing message in {chat_id}: {e}", exc_info=True)
+
+    # ... (其餘程式碼保持不變) ...
