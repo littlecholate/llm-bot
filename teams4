@@ -1,0 +1,313 @@
+# services/llm_engine.py
+import os
+import logging
+from typing import List, Dict
+from openai import AsyncOpenAI
+
+logger = logging.getLogger("LLMEngine")
+
+class LLMEngine:
+    def __init__(self):
+        self.api_key = os.getenv("OPENAI_API_KEY")
+        if not self.api_key:
+            logger.warning("OPENAI_API_KEY not found! LLM will fail.")
+        
+        # 初始化 Async Client
+        self.client = AsyncOpenAI(api_key=self.api_key)
+        self.model = "gpt-4o-mini" # 或 gpt-3.5-turbo, gpt-4
+
+    async def generate_response(self, history: List[Dict], system_prompt: str) -> str:
+        """
+        將對話紀錄與 System Prompt 組合，呼叫 LLM 生成回覆
+        """
+        try:
+            # 1. 建構 Messages 列表 (System + History)
+            messages = [{"role": "system", "content": system_prompt}]
+            
+            # 將我們 MemoryStore 的格式 (timestamp, role, content) 轉換為 OpenAI 格式
+            for msg in history:
+                messages.append({
+                    "role": msg["role"], # user 或 assistant
+                    "content": msg["content"]
+                })
+
+            # 2. 呼叫 OpenAI API
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=0.7,
+                max_tokens=800
+            )
+
+            # 3. 取得回覆內容
+            answer = response.choices[0].message.content
+            return answer
+
+        except Exception as e:
+            logger.error(f"LLM Generation Error: {e}")
+            return "抱歉，我現在無法連接到大腦運算單元，請稍後再試。"
+
+
+
+
+
+
+# services/tools/jira_client.py
+import os
+import aiohttp
+import logging
+import base64
+
+logger = logging.getLogger("JiraClient")
+
+class JiraClient:
+    def __init__(self):
+        self.base_url = os.getenv("JIRA_URL")
+        self.email = os.getenv("JIRA_EMAIL")
+        self.api_token = os.getenv("JIRA_API_TOKEN")
+        self.enabled = all([self.base_url, self.email, self.api_token])
+
+        if not self.enabled:
+            logger.warning("Jira config missing. Jira features will be disabled.")
+
+    async def create_ticket(self, summary: str, description: str, project_key: str = "IT") -> str:
+        """
+        建立 Jira Ticket 並回傳 Key (e.g., IT-101)
+        """
+        if not self.enabled:
+            logger.info("Jira is disabled, skipping ticket creation.")
+            return "JIRA-DISABLED"
+
+        url = f"{self.base_url}/rest/api/3/issue"
+        
+        # 建構 Basic Auth Header
+        auth_str = f"{self.email}:{self.api_token}"
+        b64_auth = base64.b64encode(auth_str.encode()).decode()
+        
+        headers = {
+            "Authorization": f"Basic {b64_auth}",
+            "Content-Type": "application/json"
+        }
+
+        # Jira Issue Payload
+        payload = {
+            "fields": {
+                "project": {"key": project_key},
+                "summary": summary,
+                "description": {
+                    "type": "doc",
+                    "version": 1,
+                    "content": [
+                        {
+                            "type": "paragraph",
+                            "content": [{"type": "text", "text": description}]
+                        }
+                    ]
+                },
+                "issuetype": {"name": "Task"}
+            }
+        }
+
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.post(url, headers=headers, json=payload) as resp:
+                    if resp.status == 201:
+                        data = await resp.json()
+                        key = data.get("key")
+                        logger.info(f"Jira Ticket Created: {key}")
+                        return key
+                    else:
+                        text = await resp.text()
+                        logger.error(f"Failed to create Jira ticket: {resp.status} - {text}")
+                        return None
+            except Exception as e:
+                logger.error(f"Jira Connection Error: {e}")
+                return None
+
+
+
+
+
+
+# services/memory_store.py (部分修改)
+# ... 前面 import 不變 ...
+
+class MemoryStore:
+    # ... __init__, add_message, get_history 不變 ...
+
+    def pop_expired_sessions(self) -> Dict[str, List[Dict]]:
+        """
+        [修改版] 檢查並『取出』過期的對話
+        回傳結構: { chat_id: [message_list] }
+        """
+        now = datetime.now(timezone.utc)
+        expired_chats = {}
+        active_ids = list(self._sessions.keys()) # 複製 key 避免迭代時修改
+
+        for chat_id in active_ids:
+            session = self._sessions[chat_id]
+            if now - session["last_active"] > self.timeout_delta:
+                # 抓出來準備回傳
+                expired_chats[chat_id] = session["history"]
+                # 從記憶體移除
+                del self._sessions[chat_id]
+        
+        return expired_chats
+
+
+
+
+
+
+# core/bot_instance.py
+import asyncio
+import logging
+import importlib
+from datetime import datetime, timezone
+from typing import Dict
+
+from services.auth_manager import AuthManager
+from services.graph_client import GraphClient
+from services.memory_store import MemoryStore
+from services.llm_engine import LLMEngine      # New
+from services.tools.jira_client import JiraClient # New
+
+# 設定 Logger
+logging.basicConfig(level=logging.INFO)
+
+class TeamsBot:
+    def __init__(self, bot_config: Dict):
+        self.config = bot_config
+        self.name = bot_config['name']
+        self.logger = logging.getLogger(f"BotInstance.{self.name}")
+        
+        # 初始化服務
+        self.auth = AuthManager(bot_config['email'], bot_config['password'])
+        self.memory = MemoryStore(session_timeout_minutes=2) # 測試時設短一點，例如 2 分鐘
+        self.client: GraphClient = None
+        
+        # 初始化 LLM 與 Tools
+        self.llm_engine = LLMEngine()
+        self.jira_client = JiraClient()
+        
+        # 動態載入 Prompt
+        # 假設 config['prompt_module'] 是 "devops_prompt"
+        # 我們從 configs.prompts.devops_prompt 載入 SYSTEM_PROMPT 變數
+        try:
+            module_name = f"configs.prompts.{bot_config['prompt_module']}"
+            mod = importlib.import_module(module_name)
+            self.system_prompt = getattr(mod, "SYSTEM_PROMPT", "You are a helpful assistant.")
+            self.logger.info(f"Loaded system prompt from {module_name}")
+        except Exception as e:
+            self.logger.error(f"Failed to load prompt module: {e}")
+            self.system_prompt = "You are a helpful assistant."
+
+        self.chat_checkpoints: Dict[str, datetime] = {}
+        self.is_running = False
+
+    async def initialize(self):
+        self.logger.info("Initializing authentication...")
+        token = await self.auth.get_token_async()
+        self.client = GraphClient(token)
+        my_id = await self.client.get_me()
+        self.logger.info(f"Bot Ready. User ID: {my_id}")
+
+    async def process_message(self, chat_id: str, message: Dict):
+        """
+        [整合版] 處理訊息：寫入記憶 -> LLM 生成 -> 回覆
+        """
+        try:
+            body_data = message.get('body') or {}
+            user_content = body_data.get('content', '')
+            if not user_content:
+                return
+
+            clean_content = user_content.replace('<p>', '').replace('</p>', '').strip()
+            self.logger.info(f"Received from {chat_id}: {clean_content}")
+
+            # 1. 寫入記憶 (User)
+            self.memory.add_message(chat_id, "user", clean_content)
+
+            # 2. 呼叫 LLM Engine
+            # 取得目前的完整對話紀錄
+            history = self.memory.get_history(chat_id)
+            
+            # 使用 LLM 生成回覆 (這是真正的 AI 思考了!)
+            reply_content = await self.llm_engine.generate_response(history, self.system_prompt)
+            
+            # 3. 寫入記憶 (Assistant)
+            self.memory.add_message(chat_id, "assistant", reply_content)
+
+            # 4. 發送回覆到 Teams
+            await self.client.send_reply(chat_id, reply_content)
+            self.logger.info(f"Replied to {chat_id}")
+
+        except Exception as e:
+            self.logger.error(f"Error processing message in {chat_id}: {e}", exc_info=True)
+
+    async def handle_expired_sessions(self):
+        """
+        處理過期對話：歸檔到 Jira
+        """
+        # 從 MemoryStore 取出並移除過期對話
+        expired_sessions = self.memory.pop_expired_sessions()
+        
+        for chat_id, history in expired_sessions.items():
+            self.logger.info(f"Session expired: {chat_id}. Archiving to Jira...")
+            
+            # 格式化對話內容為文字
+            conversation_text = ""
+            for msg in history:
+                timestamp = msg.get("timestamp", "")
+                role = msg.get("role", "unknown")
+                content = msg.get("content", "")
+                conversation_text += f"[{timestamp}] {role}: {content}\n"
+            
+            # 呼叫 Jira Client 建立 Ticket
+            summary = f"[{self.name}] Chat Archive: {chat_id[:10]}..."
+            ticket_key = await self.jira_client.create_ticket(
+                summary=summary, 
+                description=conversation_text
+            )
+            
+            if ticket_key:
+                self.logger.info(f"Archived chat {chat_id} to Jira: {ticket_key}")
+
+    async def run_forever(self):
+        await self.initialize()
+        self.is_running = True
+        self.logger.info("Starting Polling Loop...")
+
+        while self.is_running:
+            try:
+                # A. Token Refresh
+                token = await self.auth.get_token_async()
+                self.client.update_token(token)
+
+                # B. Polling Logic
+                active_chats = await self.client.get_recent_chats(limit=10)
+                now = datetime.now(timezone.utc)
+
+                for chat in active_chats:
+                    chat_id = chat['id']
+                    if chat_id not in self.chat_checkpoints:
+                        self.chat_checkpoints[chat_id] = now
+                        continue
+                    
+                    last_check = self.chat_checkpoints[chat_id]
+                    new_msgs = await self.client.get_new_messages(chat_id, last_check)
+                    
+                    if new_msgs:
+                        self.chat_checkpoints[chat_id] = now
+                        for msg in new_msgs:
+                            asyncio.create_task(self.process_message(chat_id, msg))
+                
+                # C. [New] 處理過期對話並歸檔
+                await self.handle_expired_sessions()
+
+                # D. Sleep
+                await asyncio.sleep(5)
+
+            except Exception as e:
+                self.logger.error(f"Global Loop Error: {e}")
+                await asyncio.sleep(10)
