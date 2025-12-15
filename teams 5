@@ -7,66 +7,64 @@ logger = logging.getLogger("MemoryStore")
 
 class MemoryStore:
     def __init__(self, session_timeout_minutes: int = 5):
-        # 結構: { chat_id: { "last_active": datetime, "history": [msg1, msg2...] } }
+        # 結構變更:
+        # {
+        #   chat_id: {
+        #       "last_active": datetime,
+        #       "history": [...],
+        #       "context": { "model": "gpt-4", "user_name": "Leo", ... }  <-- New
+        #   }
+        # }
         self._sessions: Dict[str, Dict[str, Any]] = {}
         self.timeout_delta = timedelta(minutes=session_timeout_minutes)
 
     def get_session(self, chat_id: str) -> Optional[Dict[str, Any]]:
-        """
-        [New] 取得目前的會話資訊。如果不存在則回傳 None。
-        """
         return self._sessions.get(chat_id)
 
-    def create_session(self, chat_id: str):
+    def create_session(self, chat_id: str, initial_context: Dict = None):
         """
-        [New] 建立一個新的會話空間 (Set Chat Info)
+        [Modified] 建立會話，可選傳入初始 Context
         """
         if chat_id not in self._sessions:
             logger.info(f"[{chat_id}] Initializing new session container.")
             self._sessions[chat_id] = {
                 "last_active": datetime.now(timezone.utc),
-                "history": []
+                "history": [],
+                "context": initial_context or {}  # 初始化 Context
             }
 
+    def set_context(self, chat_id: str, key: str, value: Any):
+        """
+        [New] 設定額外的 Session 資訊 (如 model info, user state)
+        """
+        if chat_id in self._sessions:
+            self._sessions[chat_id]["context"][key] = value
+        else:
+            logger.warning(f"[{chat_id}] Cannot set context. Session does not exist.")
+
+    def get_context(self, chat_id: str, key: str) -> Any:
+        """
+        [New] 取得特定的 Context 值
+        """
+        session = self._sessions.get(chat_id)
+        if session:
+            return session.get("context", {}).get(key)
+        return None
+
     def add_message(self, chat_id: str, role: str, content: str):
-        """
-        [Modified] 純粹負責新增訊息與更新時間。
-        注意：呼叫此方法前，外部應確保 session 已經透過 create_session 建立。
-        """
+        # ... (保持不變) ...
         now = datetime.now(timezone.utc)
-        
-        # 安全防護：雖然外部應該要先 create，但這裡防呆一下
         if chat_id not in self._sessions:
-            logger.warning(f"[{chat_id}] Session not found during add_message. Auto-creating.")
             self.create_session(chat_id)
         
-        # 更新最後活躍時間
         self._sessions[chat_id]["last_active"] = now
-        
-        # 新增訊息
         self._sessions[chat_id]["history"].append({
             "role": role,
             "content": content,
             "timestamp": now.isoformat()
         })
 
-    def get_history(self, chat_id: str) -> List[Dict]:
-        """取得特定 Chat 的完整對話紀錄"""
-        return self._sessions.get(chat_id, {}).get("history", [])
-
-    def pop_expired_sessions(self) -> Dict[str, List[Dict]]:
-        """檢查並『取出』過期的對話 (用於歸檔)"""
-        now = datetime.now(timezone.utc)
-        expired_chats = {}
-        active_ids = list(self._sessions.keys())
-
-        for chat_id in active_ids:
-            session = self._sessions[chat_id]
-            if now - session["last_active"] > self.timeout_delta:
-                expired_chats[chat_id] = session["history"]
-                del self._sessions[chat_id]
-        
-        return expired_chats
+    # ... (get_history, pop_expired_sessions 保持不變) ...
 
 
 
@@ -74,43 +72,53 @@ class MemoryStore:
 
 # core/bot_instance.py (部分程式碼)
 
-    # ... (前面的 imports 與 __init__ 保持不變) ...
-
     async def process_message(self, chat_id: str, message: Dict):
-        """
-        [修改版] 明確的會話管理流程
-        """
         try:
             body_data = message.get('body') or {}
             user_content = body_data.get('content', '')
             if not user_content:
                 return
 
+            # 解析發送者資訊 (從 Graph API 訊息結構中抓取)
+            from_user = message.get('from', {}).get('user', {})
+            sender_name = from_user.get('displayName', 'Unknown User')
+            
             clean_content = user_content.replace('<p>', '').replace('</p>', '').strip()
-            self.logger.info(f"Received from {chat_id}: {clean_content}")
+            self.logger.info(f"Received from {chat_id} ({sender_name}): {clean_content}")
 
-            # --- [Step 1: Check Chat Session Exist] ---
+            # --- [Step 1: Check Session] ---
             session = self.memory.get_session(chat_id)
             
-            # --- [Step 2: Create Info if not exist] ---
+            # --- [Step 2: Create & Set Initial Info] ---
             if not session:
                 self.logger.info(f"No active session for {chat_id}. Creating new one.")
                 self.memory.create_session(chat_id)
-                # 這裡未來可以加入: 載入使用者偏好、檢查權限等邏輯
+                
+                # [New] 設定初始 Context
+                self.memory.set_context(chat_id, "sender_name", sender_name)
+                self.memory.set_context(chat_id, "start_time", datetime.now().isoformat())
+                self.memory.set_context(chat_id, "model_used", self.llm_engine.model) # 紀錄目前使用的模型
             
             # --- [Step 3: Add User Message] ---
             self.memory.add_message(chat_id, "user", clean_content)
 
-            # 4. 呼叫 LLM Engine
+            # --- [Step 4: LLM Generation] ---
             history = self.memory.get_history(chat_id)
+            
+            # (進階應用) 如果你想根據 sender_name 客製化 System Prompt，可以在這裡取出 context
+            # stored_name = self.memory.get_context(chat_id, "sender_name")
+            # custom_prompt = f"Hi {stored_name}, {self.system_prompt}"
+
             reply_content = await self.llm_engine.generate_response(history, self.system_prompt)
             
-            # 5. 寫入記憶 (Assistant) & 發送回覆
+            # --- [Step 5: Reply & Update Info] ---
             self.memory.add_message(chat_id, "assistant", reply_content)
+            
+            # [New] 你甚至可以根據 LLM 的回覆更新 Context (例如 LLM 判斷使用者意圖是 'booking')
+            # self.memory.set_context(chat_id, "last_intent", "chat") 
+
             await self.client.send_reply(chat_id, reply_content)
-            self.logger.info(f"Replied to {chat_id}")
 
         except Exception as e:
             self.logger.error(f"Error processing message in {chat_id}: {e}", exc_info=True)
 
-    # ... (其餘程式碼保持不變) ...
