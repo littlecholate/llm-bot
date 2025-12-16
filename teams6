@@ -1,0 +1,296 @@
+# services/graph_client.py (部分修改)
+
+    async def get_new_messages(self, chat_id: str, last_check_time: datetime) -> List[Dict]:
+        """
+        [修正版 v3] 支援偵測 Self-Message Reactions
+        """
+        url = f"{self.base_url}/me/chats/{chat_id}/messages?$top=20&$sort=lastModifiedDateTime desc"
+        
+        data = await self._request("GET", url)
+        raw_messages = data.get("value", [])
+        new_messages = []
+        
+        if last_check_time.tzinfo is None:
+            last_check_time = last_check_time.replace(tzinfo=timezone.utc)
+
+        for msg in raw_messages:
+            # 取得發送者 ID
+            from_data = msg.get("from") or {}
+            user_data = from_data.get("user") or {}
+            sender_id = user_data.get("id")
+
+            # --- [關鍵修改 Start] ---
+            # 判斷是否為機器人自己
+            is_self = (self.user_id and sender_id == self.user_id)
+            
+            # 判斷是否有 Reactions
+            reactions = msg.get("reactions") or []
+            has_reactions = len(reactions) > 0
+
+            # 規則：
+            # 1. 如果是別人的訊息 -> 保留
+            # 2. 如果是自己的訊息 且 有被按讚 -> 保留 (為了觸發結束機制)
+            # 3. 如果是自己的訊息 且 無按讚 -> 丟棄
+            if is_self and not has_reactions:
+                continue
+            # --- [關鍵修改 End] ---
+
+            # 時間檢查
+            created_str = msg.get("lastModifiedDateTime")
+            if not created_str:
+                continue
+            try:
+                msg_time = dateutil.parser.isoparse(created_str)
+            except Exception:
+                continue
+            
+            if msg_time > last_check_time:
+                new_messages.append(msg)
+
+        new_messages.reverse()
+        return new_messages
+
+    async def send_reply(self, chat_id: str, content: str) -> Optional[str]:
+        """
+        [Modified] 發送回覆並回傳 Message ID
+        """
+        url = f"{self.base_url}/me/chats/{chat_id}/messages"
+        html_content = content.replace("\n", "<br>")
+        payload = {
+            "body": {
+                "contentType": "html",
+                "content": f"<div>{html_content}</div>"
+            }
+        }
+        
+        # 改為接收回傳值
+        data = await self._request("POST", url, json_data=payload)
+        return data.get("id")
+
+
+
+
+
+# services/memory_store.py (新增方法)
+
+    def force_archive_session(self, chat_id: str) -> Optional[List[Dict]]:
+        """
+        [New] 強制結束並取出特定 Session (用於主動結束)
+        """
+        if chat_id in self._sessions:
+            logger.info(f"[{chat_id}] Force archiving session.")
+            session = self._sessions.pop(chat_id)
+            return session["history"]
+        return None
+
+
+
+
+
+# core/bot_instance.py
+
+    async def process_message(self, chat_id: str, message: Dict):
+        try:
+            msg_id = message.get('id')
+            body_data = message.get('body') or {}
+            content = body_data.get('content', '')
+            
+            # --- [Logic A: 檢查是否為「回饋訊息」被按讚] ---
+            # 從 Context 取出我們上次發送的 Feedback Message ID
+            expected_feedback_id = self.memory.get_context(chat_id, "feedback_msg_id")
+            
+            # 如果收到的訊息 ID 吻合，且包含 reactions
+            if expected_feedback_id and msg_id == expected_feedback_id:
+                reactions = message.get('reactions') or []
+                if reactions:
+                    self.logger.info(f"Feedback received on {msg_id}. Terminating session.")
+                    # 強制結算
+                    await self.archive_session(chat_id, reason="User Feedback")
+                    return # 結束處理，不再當作對話內容
+
+            # --- [Logic B: 正常對話處理] ---
+            # 如果是機器人自己的訊息(且沒被上面的 Logic A 攔截)，則忽略，避免自己跟自己對話
+            from_user = message.get('from', {}).get('user', {})
+            sender_id = from_user.get('id')
+            if self.client.user_id and sender_id == self.client.user_id:
+                return
+
+            if not content:
+                return
+
+            clean_content = content.replace('<p>', '').replace('</p>', '').strip()
+            self.logger.info(f"Received from {chat_id}: {clean_content}")
+
+            # 1. 會話管理 (Create/Set)
+            session = self.memory.get_session(chat_id)
+            if not session:
+                self.memory.create_session(chat_id)
+                self.memory.set_context(chat_id, "model_used", self.llm_engine.model)
+
+            # 2. 記錄使用者訊息
+            self.memory.add_message(chat_id, "user", clean_content)
+
+            # 3. LLM 生成
+            history = self.memory.get_history(chat_id)
+            reply_content = await self.llm_engine.generate_response(history, self.system_prompt)
+            
+            # 4. 發送 LLM 回覆
+            self.memory.add_message(chat_id, "assistant", reply_content)
+            await self.client.send_reply(chat_id, reply_content)
+
+            # 5. [New] 發送「回饋引導訊息」並紀錄 ID
+            feedback_text = "✨ <b>如果這個回答有幫助，請對此訊息按讚(React)以結束對話。</b>"
+            feedback_msg_id = await self.client.send_reply(chat_id, feedback_text)
+            
+            if feedback_msg_id:
+                self.memory.set_context(chat_id, "feedback_msg_id", feedback_msg_id)
+
+        except Exception as e:
+            self.logger.error(f"Error processing message in {chat_id}: {e}", exc_info=True)
+
+    async def archive_session(self, chat_id: str, reason: str = "Timeout"):
+        """
+        [Refactor] 將歸檔邏輯獨立出來，供 Timeout 和 Feedback 共用
+        """
+        # 根據 reason 決定呼叫哪種 pop 方法
+        if reason == "User Feedback":
+            history = self.memory.force_archive_session(chat_id)
+        else:
+            # 這裡是原本 handle_expired_sessions 的邏輯，但為了共用，我們假設外面傳進來的是單一 chat
+            # 為了保持架構簡單，我們讓 handle_expired_sessions 繼續負責 timeout
+            return 
+
+        if history:
+            self.logger.info(f"Archiving chat {chat_id} (Reason: {reason})...")
+            conversation_text = ""
+            for msg in history:
+                conversation_text += f"[{msg['timestamp']}] {msg['role']}: {msg['content']}\n"
+            
+            summary = f"[{self.name}] Chat Archive ({reason})"
+            ticket_key = await self.jira_client.create_ticket(summary, conversation_text)
+            self.logger.info(f"Jira Ticket: {ticket_key}")
+
+    async def handle_expired_sessions(self):
+        """
+        處理因時間過期而結束的對話
+        """
+        expired_sessions = self.memory.pop_expired_sessions()
+        for chat_id, history in expired_sessions.items():
+            # 這裡可以直接複用 archive 邏輯，或者手動寫入 Jira
+            # 為了簡單演示，我們手動寫入
+            self.logger.info(f"Session timeout: {chat_id}")
+            conversation_text = "\n".join([f"{m['role']}: {m['content']}" for m in history])
+            await self.jira_client.create_ticket(f"[{self.name}] Timeout Archive", conversation_text)
+
+
+
+
+
+from curl_cffi import requests
+import time
+
+class StealthBot:
+    def __init__(self, token=None):
+        # 使用 Session 可以自動管理 Cookies，讓行為更像真人
+        self.session = requests.Session()
+        
+        # 核心關鍵：指定要偽裝的瀏覽器指紋 (目前建議用 chrome124 或 chrome120)
+        # 這行程式碼會自動調整 TLS 握手細節和 Header 排序
+        self.impersonate_target = "chrome124"
+        
+        self.token = token
+        
+        # 設定基礎 Headers (雖然 impersonate 會幫忙，但手動補上常見 Header 更保險)
+        self.session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+            # 如果你有 Token，可以直接預設帶入
+            "Authorization": f"Bearer {self.token}" if self.token else ""
+        })
+
+    def send_post(self, url, data):
+        """ 模擬 POST 請求 (通常用於登入或送出表單) """
+        try:
+            print(f"🚀 正在發送 POST 請求: {url}")
+            
+            # 注意：這裡使用 impersonate 參數
+            response = self.session.post(
+                url, 
+                json=data, 
+                impersonate=self.impersonate_target,
+                timeout=30 # 建議設定超時，避免卡死
+            )
+            
+            # 檢查是否成功
+            if response.status_code == 200:
+                print("✅ POST 成功！")
+                return response.json()
+            elif response.status_code == 401:
+                print("❌ 401 Unauthorized: Token 可能失效或被拒絕")
+            elif response.status_code == 503:
+                print("🛡️ 503 Detected: 遇到強效防火牆 (Cloudflare等)")
+            else:
+                print(f"⚠️ 其他狀態碼: {response.status_code}")
+                
+            return response.text
+
+        except Exception as e:
+            print(f"💥 發生錯誤: {e}")
+            return None
+
+    def send_get(self, url):
+        """ 模擬 GET 請求 (通常用於抓取資料) """
+        try:
+            print(f"🔍 正在發送 GET 請求: {url}")
+            
+            response = self.session.get(
+                url, 
+                impersonate=self.impersonate_target,
+                timeout=30
+            )
+            
+            if response.status_code == 200:
+                print("✅ GET 成功！資料長度:", len(response.text))
+                return response.json() # 如果回傳是 JSON
+            else:
+                print(f"❌ 請求失敗: {response.status_code}")
+                print("回應內容:", response.text[:200]) # 印出前200字除錯
+                return None
+                
+        except Exception as e:
+            print(f"💥 發生錯誤: {e}")
+            return None
+
+# --- 使用範例 ---
+
+if __name__ == "__main__":
+    # 1. 你的目標 API
+    TARGET_LOGIN_URL = "https://api.example.com/v1/login"
+    TARGET_DATA_URL = "https://api.example.com/v1/orders"
+    
+    # 2. 初始化機器人
+    bot = StealthBot()
+    
+    # 3. 測試 POST (例如登入)
+    login_payload = {
+        "email": "my_email@test.com",
+        "password": "my_password"
+    }
+    
+    # 假設這是一個會回傳 Token 的登入接口
+    login_result = bot.send_post(TARGET_LOGIN_URL, login_payload)
+    
+    if login_result and "token" in login_result:
+        new_token = login_result['token']
+        print(f"🎟️ 取得 Token: {new_token[:10]}...")
+        
+        # 更新機器人的 Token
+        bot.session.headers.update({"Authorization": f"Bearer {new_token}"})
+        
+        # 休息一下，模擬真人行為 (重要！)
+        time.sleep(2)
+        
+        # 4. 測試 GET (帶入剛剛的 Token)
+        data = bot.send_get(TARGET_DATA_URL)
+        print("資料範例:", data)
