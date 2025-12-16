@@ -1,0 +1,191 @@
+# services/graph_client.py (新增方法)
+import aiohttp
+import logging
+# ... 其他 imports ...
+
+class GraphClient:
+    # ... (前略: __init__, update_token, _request 等保持不變) ...
+
+    async def download_image(self, url: str) -> bytes:
+        """
+        [New] 下載 Teams 託管的圖片內容
+        注意：必須使用與 Graph API 相同的 Token
+        """
+        # 確保 URL 是完整的 (有時候 Teams 會給相對路徑，雖少見但防呆)
+        if not url.startswith("http"):
+            logger.warning(f"Invalid image URL: {url}")
+            return None
+
+        # 使用 ssl=False 避免內網憑證問題
+        connector = aiohttp.TCPConnector(ssl=False)
+        async with aiohttp.ClientSession(connector=connector) as session:
+            try:
+                # 使用既有的 self.headers (包含 Authorization)
+                async with session.get(url, headers=self.headers) as resp:
+                    if resp.status == 200:
+                        return await resp.read()
+                    else:
+                        logger.error(f"Failed to download image: {resp.status}")
+                        return None
+            except Exception as e:
+                logger.error(f"Image Download Error: {e}")
+                return None
+
+
+
+
+
+# services/memory_store.py
+
+    # ... (前略) ...
+
+    def add_message(self, chat_id: str, role: str, content: str, images: List[str] = None):
+        """
+        [Modified] 支援圖片路徑儲存
+        :param images: 圖片的本地路徑列表 (List[str])
+        """
+        now = datetime.now(timezone.utc)
+        if chat_id not in self._sessions:
+            self.create_session(chat_id)
+        
+        self._sessions[chat_id]["last_active"] = now
+        
+        message_entry = {
+            "role": role,
+            "content": content,
+            "images": images or [],  # [New] 儲存圖片路徑
+            "timestamp": now.isoformat()
+        }
+        
+        self._sessions[chat_id]["history"].append(message_entry)
+
+
+
+
+
+# core/bot_instance.py
+import os
+import re
+import uuid
+import aiofiles # 建議安裝: uv add aiofiles (非同步檔案寫入)
+# ... 其他 imports ...
+
+class TeamsBot:
+    # ... (__init__ 等保持不變) ...
+
+    async def _download_and_save_images(self, chat_id: str, content: str) -> List[str]:
+        """
+        [New] 解析 HTML 內容，下載所有圖片並回傳本地路徑列表
+        """
+        # 1. 使用 Regex 抓取 src 屬性
+        # Teams 的 img tag 通常長這樣: <img src="https://graph.microsoft.com/..." ...>
+        img_urls = re.findall(r'<img[^>]+src="([^">]+)"', content)
+        
+        if not img_urls:
+            return []
+
+        saved_paths = []
+        
+        # 建立暫存資料夾
+        save_dir = f"temp_images/{chat_id}"
+        os.makedirs(save_dir, exist_ok=True)
+
+        for i, url in enumerate(img_urls):
+            # 簡單過濾：只下載微軟 Graph 的連結 (避免外部追蹤像素等)
+            # if "graph.microsoft.com" not in url: continue 
+            
+            self.logger.info(f"Found image, downloading: {url[:50]}...")
+            image_data = await self.client.download_image(url)
+            
+            if image_data:
+                # 產生檔名 (使用 uuid 避免衝突)
+                filename = f"{uuid.uuid4()}.png" # Teams 圖片通常可直接存為 png 或 jpg
+                file_path = os.path.join(save_dir, filename)
+                
+                # 非同步寫入檔案
+                async with aiofiles.open(file_path, 'wb') as f:
+                    await f.write(image_data)
+                
+                saved_paths.append(file_path)
+                self.logger.info(f"Image saved to: {file_path}")
+            else:
+                self.logger.warning("Failed to download one of the images.")
+
+        return saved_paths
+
+    async def process_message(self, chat_id: str, message: Dict):
+        try:
+            # ... (前略: ID 檢查、Self check 等) ...
+            
+            body_data = message.get('body') or {}
+            content = body_data.get('content', '')
+            
+            # --- [Modified] ---
+            clean_content = content.replace('<p>', '').replace('</p>', '').strip()
+            
+            # 1. 處理圖片 (下載並儲存)
+            image_paths = await self._download_and_save_images(chat_id, content)
+            
+            if image_paths:
+                self.logger.info(f"Processed {len(image_paths)} images from user.")
+
+            # 2. 寫入記憶 (User) - 傳入圖片路徑
+            # 注意：這裡將圖片綁定到了 Session Memory 中
+            self.memory.add_message(chat_id, "user", clean_content, images=image_paths)
+
+            # 3. 呼叫 LLM Engine
+            history = self.memory.get_history(chat_id)
+            
+            # (進階) 如果您的 LLM 支援 Vision (如 GPT-4o)，
+            # 您需要在 llm_engine.generate_response 裡讀取這些 path 並轉為 Base64 傳給 API
+            # 目前我們先維持傳遞文字，圖片路徑已在 history 中
+            
+            reply_content = await self.llm_engine.generate_response(history, self.system_prompt)
+            
+            # ... (後略: 發送回覆、Feedback 邏輯保持不變) ...
+
+        except Exception as e:
+            self.logger.error(f"Error processing message in {chat_id}: {e}", exc_info=True)
+
+
+
+
+
+# services/llm_engine.py (修改建議)
+import base64
+
+    # ...
+    
+    @staticmethod
+    def _encode_image(image_path):
+        with open(image_path, "rb") as image_file:
+            return base64.b64encode(image_file.read()).decode('utf-8')
+
+    async def generate_response(self, history: List[Dict], system_prompt: str) -> str:
+        messages = [{"role": "system", "content": system_prompt}]
+        
+        for msg in history:
+            content_payload = []
+            
+            # 1. 加入文字
+            if msg["content"]:
+                content_payload.append({"type": "text", "text": msg["content"]})
+            
+            # 2. 加入圖片 (如果有)
+            if msg.get("images"):
+                for img_path in msg["images"]:
+                    base64_image = self._encode_image(img_path)
+                    content_payload.append({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{base64_image}"
+                        }
+                    })
+            
+            # OpenAI 接受 content 為 list
+            messages.append({
+                "role": msg["role"],
+                "content": content_payload
+            })
+
+        # ... (呼叫 API 保持不變) ...
