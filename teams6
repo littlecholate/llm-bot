@@ -294,3 +294,62 @@ if __name__ == "__main__":
         # 4. 測試 GET (帶入剛剛的 Token)
         data = bot.send_get(TARGET_DATA_URL)
         print("資料範例:", data)
+
+
+
+
+
+from curl_cffi import requests
+
+# 1. Define your target URL and Form Data
+url = "https://internal-site.company.com/login"
+
+# If the website uses Form Data (application/x-www-form-urlencoded),
+# define it as a standard dictionary.
+form_payload = {
+    "username": "my_user",
+    "password": "my_password",
+    "submit": "Login",  # Some legacy forms need the button name too
+    "_csrf": "xyz..."   # If there is a hidden token in the HTML, include it here
+}
+
+print(f"🚀 Sending POST request to: {url}")
+
+try:
+    # 2. Send the Request
+    response = requests.post(
+        url,
+        # A. USE 'data' FOR FORM DATA (Use 'json' for JSON)
+        data=form_payload,
+        
+        # B. DISABLE SSL VERIFICATION (Solves SSLError on internal sites)
+        verify=False,
+        
+        # C. MAX STEALTH (Impersonates Chrome 120 browser fingerprint)
+        impersonate="chrome120",
+        
+        headers={
+            # Mimic standard browser headers
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer": "https://internal-site.company.com/", # Vital for internal validations
+            "Origin": "https://internal-site.company.com"
+        },
+        timeout=10
+    )
+
+    # 3. Check Results
+    if response.status_code == 200:
+        print("✅ Success! Login passed.")
+        print("Response Body:", response.text[:200]) # Print first 200 chars
+        
+        # If you need to grab a cookie from the response:
+        # cookies = response.cookies
+        # print("Cookies received:", cookies.get_dict())
+        
+    else:
+        print(f"❌ Failed with status code: {response.status_code}")
+        print("Response:", response.text)
+
+except Exception as e:
+    print(f"💥 Error occurred: {e}")
+
