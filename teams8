@@ -1,0 +1,159 @@
+    # core/bot_instance.py (run_forever 部分)
+
+    async def run_forever(self):
+        await self.initialize()
+        self.is_running = True
+        self.logger.info("Starting Polling Loop...")
+
+        while self.is_running:
+            try:
+                # A. Token Refresh & Update
+                token = await self.auth.get_token_async()
+                self.client.update_token(token)
+
+                # B. Polling Logic
+                active_chats = await self.client.get_recent_chats(limit=10)
+                now = datetime.now(timezone.utc)
+
+                for chat in active_chats:
+                    chat_id = chat['id']
+                    
+                    # [New] 取得聊天室類型 (oneOnOne, group, meeting)
+                    chat_type = chat.get('chatType', 'oneOnOne') 
+
+                    # 確保 Session 存在並更新 Context
+                    # 這樣 process_message 就不需要再查一次 API
+                    session = self.memory.get_session(chat_id)
+                    if not session:
+                        self.memory.create_session(chat_id)
+                    
+                    # 將 chat_type 更新進 context
+                    self.memory.set_context(chat_id, "chat_type", chat_type)
+
+                    # 初始化 Checkpoint
+                    if chat_id not in self.chat_checkpoints:
+                        self.chat_checkpoints[chat_id] = now
+                        continue
+                    
+                    # C. 抓取新訊息
+                    last_check = self.chat_checkpoints[chat_id]
+                    new_msgs = await self.client.get_new_messages(chat_id, last_check)
+                    
+                    if new_msgs:
+                        self.chat_checkpoints[chat_id] = now
+                        for msg in new_msgs:
+                            asyncio.create_task(self.process_message(chat_id, msg))
+                
+                # ... (後續 clean up 邏輯不變) ...
+
+
+
+
+
+    # core/bot_instance.py (process_message 部分)
+
+    async def process_message(self, chat_id: str, message: Dict):
+        try:
+            # 1. 基礎解析
+            msg_id = message.get('id')
+            body_data = message.get('body') or {}
+            content = body_data.get('content', '')
+            
+            # ... (略過先前的 Feedback Check 邏輯，放在這裡之前) ...
+
+            # 2. 自我過濾 (防止無限迴圈)
+            from_user = message.get('from', {}).get('user', {})
+            sender_id = from_user.get('id')
+            if self.client.user_id and sender_id == self.client.user_id:
+                return
+
+            if not content:
+                return
+
+            # --- [關鍵新增: 群組靜默邏輯] ---
+            # 從 Context 取得聊天室類型
+            chat_type = self.memory.get_context(chat_id, "chat_type")
+            
+            # 定義是否需要回覆
+            should_reply = False
+
+            if chat_type == "oneOnOne":
+                # 一對一聊天：永遠回覆
+                should_reply = True
+            else:
+                # 群組聊天 (group, meeting)：檢查是否被 Mention
+                mentions = message.get("mentions", [])
+                
+                # 遍歷所有被提及的人，看有沒有自己
+                is_mentioned = False
+                if mentions:
+                    for m in mentions:
+                        mentioned_user = m.get("mentioned", {}).get("user", {})
+                        if mentioned_user.get("id") == self.client.user_id:
+                            is_mentioned = True
+                            break
+                
+                if is_mentioned:
+                    self.logger.info(f"Bot mentioned in group chat {chat_id}. Processing.")
+                    should_reply = True
+                else:
+                    self.logger.debug(f"Ignored message in group chat {chat_id} (No mention).")
+                    return # <--- 直接結束，不處理，不存 Memory
+
+            if not should_reply:
+                return
+            # --- [邏輯結束] ---
+
+            
+            clean_content = content.replace('<p>', '').replace('</p>', '').strip()
+            self.logger.info(f"Received from {chat_id}: {clean_content}")
+
+            # ... (後續圖片下載、記憶寫入、LLM 呼叫保持不變) ...
+
+
+
+
+
+# services/graph_client.py (新增方法)
+
+    async def send_typing_indicator(self, chat_id: str):
+        """
+        [New] 發送 'User is typing...' 狀態給 Teams
+        注意：這個狀態通常只會維持約 5-10 秒，之後會自動消失。
+        """
+        url = f"{self.base_url}/me/chats/{chat_id}/sendActivityNotification"
+        
+        payload = {
+            "type": "typing"
+        }
+        
+        # 這裡我們使用既有的 _request 方法，它已經處理了 Headers 和 SSL
+        # 我們不需要檢查回傳值，因為這只是一個狀態通知，失敗了也不影響主流程
+        await self._request("POST", url, json_data=payload)
+
+
+
+
+
+# core/bot_instance.py (process_message 部分)
+
+    async def process_message(self, chat_id: str, message: Dict):
+        try:
+            # ... (前略：解析訊息、圖片下載、寫入 User Memory) ...
+
+            # 2. 寫入記憶 (User)
+            self.memory.add_message(chat_id, "user", clean_content, images=image_paths)
+
+            # --- [New] 發送 Typing Indicator ---
+            # 告訴使用者：「我收到訊息了，正在思考中...」
+            # 這會讓 Teams 介面左下角出現 "DevOps Bot is typing..."
+            await self.client.send_typing_indicator(chat_id)
+
+            # 3. 呼叫 LLM Engine (這可能會花 3~10 秒)
+            history = self.memory.get_history(chat_id)
+            reply_content = await self.llm_engine.generate_response(history, self.system_prompt)
+            
+            # ... (後略：發送回覆、Feedback 引導) ...
+
+        except Exception as e:
+            self.logger.error(f"Error processing message in {chat_id}: {e}", exc_info=True)
