@@ -113,3 +113,109 @@ class TeamsBot:
         }
         
         await self._request("PATCH", url, json_data=payload)
+
+
+
+
+
+# utils/time_helper.py
+from datetime import datetime, timezone, timedelta
+import dateutil.parser
+
+TAIWAN_TZ = timezone(timedelta(hours=8))
+
+def get_current_utc_time() -> datetime:
+    """取得標準 UTC 時間"""
+    return datetime.now(timezone.utc)
+
+def get_current_tw_time() -> datetime:
+    """取得台灣時間"""
+    return datetime.now(TAIWAN_TZ)
+
+def parse_iso_time(iso_str: str) -> datetime:
+    """解析 ISO 字串並確保有時區資訊"""
+    dt = dateutil.parser.isoparse(iso_str)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+def format_for_human(dt: datetime) -> str:
+    """轉為人類可讀格式 (台灣時間): YYYY-MM-DD HH:MM:SS"""
+    return dt.astimezone(TAIWAN_TZ).strftime('%Y-%m-%d %H:%M:%S')
+
+
+
+
+
+# utils/file_cleaner.py
+import os
+import time
+import asyncio
+import logging
+
+logger = logging.getLogger("FileCleaner")
+
+async def cleanup_temp_files(folder_path: str, max_age_minutes: int = 60):
+    """
+    非同步執行：刪除指定資料夾中超過 max_age_minutes 的檔案
+    """
+    def _sync_clean():
+        now = time.time()
+        cutoff = now - (max_age_minutes * 60)
+        
+        if not os.path.exists(folder_path):
+            return
+
+        count = 0
+        for filename in os.listdir(folder_path):
+            file_path = os.path.join(folder_path, filename)
+            try:
+                # 檢查最後修改時間
+                if os.path.isfile(file_path) and os.path.getmtime(file_path) < cutoff:
+                    os.remove(file_path)
+                    count += 1
+            except Exception as e:
+                logger.warning(f"Failed to delete {filename}: {e}")
+        
+        if count > 0:
+            logger.info(f"Cleaned up {count} old files in {folder_path}")
+
+    # 使用 to_thread 避免 os.remove 阻塞 Main Loop
+    await asyncio.to_thread(_sync_clean)
+
+
+
+
+
+# utils/async_retry.py
+import asyncio
+import logging
+import functools
+
+logger = logging.getLogger("RetryUtil")
+
+def async_retry(retries=3, delay=1, backoff=2, exceptions=(Exception,)):
+    """
+    非同步重試裝飾器
+    :param retries: 最大重試次數
+    :param delay: 初始等待秒數
+    :param backoff: 每次失敗後等待時間的倍數 (指數退避)
+    :param exceptions: 觸發重試的例外類型
+    """
+    def decorator(func):
+        @functools.wraps(func)
+        async def wrapper(*args, **kwargs):
+            current_delay = delay
+            for attempt in range(retries):
+                try:
+                    return await func(*args, **kwargs)
+                except exceptions as e:
+                    if attempt == retries - 1:
+                        logger.error(f"Final failure in {func.__name__}: {e}")
+                        raise e
+                    
+                    logger.warning(f"Error in {func.__name__}: {e}. Retrying in {current_delay}s... ({attempt + 1}/{retries})")
+                    await asyncio.sleep(current_delay)
+                    current_delay *= backoff
+        return wrapper
+    return decorator
