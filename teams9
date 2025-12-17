@@ -1,0 +1,115 @@
+# utils/text_converter.py
+import markdown
+
+def markdown_to_teams_html(markdown_text: str) -> str:
+    """
+    將 LLM 的 Markdown 格式轉換為 Teams 支援的 HTML
+    """
+    if not markdown_text:
+        return ""
+
+    # 使用 Python markdown 庫進行轉換
+    # extensions 說明:
+    # - fenced_code: 支援 ```python ... ``` 這種區塊
+    # - tables: 支援 Markdown 表格
+    # - nl2br: 將換行符號轉換為 <br> (選擇性開啟，視 LLM 輸出習慣而定)
+    # - sane_lists: 優化列表的識別
+    html = markdown.markdown(
+        markdown_text,
+        extensions=['fenced_code', 'tables', 'sane_lists']
+    )
+
+    # --- Teams 特殊優化 ---
+    # Teams 的 HTML 對某些標籤有潔癖，可以在這裡做額外處理
+    # 這裡是一個簡單的後處理範例：
+    
+    # 1. 確保內容被 div 包裹 (Teams 建議)
+    if not html.startswith("<div>"):
+        html = f"<div>{html}</div>"
+        
+    return html
+
+
+
+
+
+# core/bot_instance.py
+# ... imports ...
+from utils.text_converter import markdown_to_teams_html  # [New] Import
+
+class TeamsBot:
+    # ...
+
+    async def process_message(self, chat_id: str, message: Dict):
+        try:
+            # ... (前略: 發送佔位訊息) ...
+
+            # 2. 呼叫 LLM Engine
+            history = self.memory.get_history(chat_id)
+            markdown_response = await self.llm_engine.generate_response(history, self.system_prompt)
+            
+            # --- [New] 轉換 Markdown -> HTML ---
+            html_response = markdown_to_teams_html(markdown_response)
+            
+            # 3. 寫入記憶 (Assistant)
+            # 注意：記憶體裡通常建議存 "原始 Markdown"，方便 LLM 下次讀取時理解上下文
+            # 如果存 HTML，LLM 讀起來會很亂
+            self.memory.add_message(chat_id, "assistant", markdown_response)
+
+            # 4. 更新訊息 (使用轉換後的 HTML)
+            if processing_msg_id:
+                # edit_message 裡面原本有簡單的 replace(\n, <br>)，
+                # 但因為我們現在傳進去的是完整的 HTML，建議去 graph_client 微調一下
+                await self.client.edit_message(chat_id, processing_msg_id, html_response)
+            else:
+                await self.client.send_reply(chat_id, html_response)
+
+            # ... (後略) ...
+
+
+
+
+
+# services/graph_client.py
+
+    # ...
+
+    async def send_reply(self, chat_id: str, content: str, is_html: bool = True) -> Optional[str]:
+        """
+        :param is_html: 如果外部已經轉好 HTML，傳入 True，就不再做換行處理
+        """
+        url = f"{self.base_url}/me/chats/{chat_id}/messages"
+        
+        # 如果已經是 HTML (來自 Markdown converter)，直接用
+        # 如果是純文字 (例如系統錯誤訊息)，才做簡單轉換
+        if is_html:
+            final_content = content
+        else:
+            final_content = content.replace("\n", "<br>")
+        
+        payload = {
+            "body": {
+                "contentType": "html",
+                "content": final_content # 這裡不需要再包 <div>，因為 converter 已經包了
+            }
+        }
+        
+        data = await self._request("POST", url, json_data=payload)
+        return data.get("id")
+
+    async def edit_message(self, chat_id: str, message_id: str, new_content: str, is_html: bool = True):
+        url = f"{self.base_url}/me/chats/{chat_id}/messages/{message_id}"
+        
+        if is_html:
+            final_content = new_content
+        else:
+            final_content = new_content.replace("\n", "<br>")
+            
+        payload = {
+            "body": {
+                "contentType": "html",
+                "content": final_content
+            }
+        }
+        
+        await self._request("PATCH", url, json_data=payload)
