@@ -1,0 +1,398 @@
+# utils/file_cleaner.py
+import os
+import time
+import asyncio
+import logging
+
+logger = logging.getLogger("FileCleaner")
+
+async def cleanup_temp_files(folder_path: str, max_age_minutes: int = 60):
+    """
+    非同步執行：刪除指定資料夾中超過 max_age_minutes 的檔案
+    """
+    def _sync_clean():
+        now = time.time()
+        cutoff = now - (max_age_minutes * 60)
+        
+        if not os.path.exists(folder_path):
+            return
+
+        count = 0
+        for filename in os.listdir(folder_path):
+            file_path = os.path.join(folder_path, filename)
+            try:
+                # 檢查最後修改時間
+                if os.path.isfile(file_path) and os.path.getmtime(file_path) < cutoff:
+                    os.remove(file_path)
+                    count += 1
+            except Exception as e:
+                logger.warning(f"Failed to delete {filename}: {e}")
+        
+        if count > 0:
+            logger.info(f"Cleaned up {count} old files in {folder_path}")
+
+    # 使用 to_thread 避免 os.remove 阻塞 Main Loop
+    await asyncio.to_thread(_sync_clean)
+
+
+
+
+
+import asyncio
+import logging
+import sys
+import os
+from typing import List
+
+# 載入設定與核心類別
+from configs.bots_config import BOTS_CONFIGURATION
+from core.bot_instance import TeamsBot
+
+# [New] 載入清理工具
+from utils.file_cleaner import cleanup_temp_files
+
+# --- 1. 全域 Log 設定 ---
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(name)s] %(levelname)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+
+logger = logging.getLogger("SystemEntry")
+
+# --- [New] 定義背景維護任務 ---
+async def run_maintenance_task():
+    """
+    背景維護迴圈：每小時檢查並清理過期的暫存圖片
+    """
+    temp_root = "temp_images"
+    logger.info("Starting Maintenance Task (File Cleaner)...")
+    
+    # 確保根目錄存在，避免報錯
+    if not os.path.exists(temp_root):
+        os.makedirs(temp_root, exist_ok=True)
+
+    while True:
+        try:
+            # 1. 遍歷 temp_images 下的所有聊天室資料夾
+            # 結構: temp_images/ <chat_id> / <image.png>
+            if os.path.exists(temp_root):
+                sub_folders = [f for f in os.listdir(temp_root) if os.path.isdir(os.path.join(temp_root, f))]
+                
+                for chat_folder in sub_folders:
+                    full_folder_path = os.path.join(temp_root, chat_folder)
+                    
+                    # 呼叫 utils 清理該資料夾 (保留 60 分鐘內的檔案)
+                    await cleanup_temp_files(full_folder_path, max_age_minutes=60)
+            
+            # 2. 休息 1 小時 (3600 秒) 後再執行
+            await asyncio.sleep(3600)
+
+        except asyncio.CancelledError:
+            logger.info("Maintenance task cancelled.")
+            break
+        except Exception as e:
+            logger.error(f"Maintenance task error: {e}")
+            # 發生錯誤時，休息 5 分鐘再試，避免死迴圈狂刷 Log
+            await asyncio.sleep(300)
+
+async def main():
+    """
+    系統入口點：讀取設定 -> 初始化 Bots -> 併發執行
+    """
+    logger.info("--- Starting Multi-Bot System ---")
+
+    active_configs = [cfg for cfg in BOTS_CONFIGURATION if cfg.get('enabled')]
+    
+    if not active_configs:
+        logger.error("No enabled bots found! Exiting.")
+        return
+
+    logger.info(f"Found {len(active_configs)} enabled bots: {[c['name'] for c in active_configs]}")
+
+    # 收集所有要執行的非同步任務
+    all_tasks = []
+
+    # 1. 加入 Bots 任務
+    for config in active_configs:
+        try:
+            bot = TeamsBot(config)
+            all_tasks.append(bot.run_forever())
+            logger.info(f"Bot instance created: {config['name']}")
+        except Exception as e:
+            logger.error(f"Failed to initialize bot {config['name']}: {e}")
+
+    # 2. [New] 加入維護任務
+    all_tasks.append(run_maintenance_task())
+
+    # 3. 同時啟動所有任務
+    logger.info(">>> All Bots & Services Launched. Press Ctrl+C to stop. <<<")
+    
+    try:
+        # 使用 asyncio.gather 並發執行 (Bot A, Bot B, Cleaner...)
+        await asyncio.gather(*all_tasks)
+    except asyncio.CancelledError:
+        logger.info("Tasks cancelled. Shutting down...")
+    except Exception as e:
+        logger.error(f"Unexpected system crash: {e}", exc_info=True)
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("\n--- System Shutdown Requested (KeyboardInterrupt) ---")
+        logger.info("Goodbye!")
+
+
+
+
+
+llllllllllllllll
+# core/bot_instance.py
+import asyncio
+import logging
+import importlib
+from datetime import datetime, timezone
+from typing import Dict
+from collections import deque  # <--- [New] 1. 引入 deque
+
+# ... (其他 imports)
+
+class TeamsBot:
+    def __init__(self, bot_config: Dict):
+        # ... (前略)
+        self.llm_engine = LLMEngine()
+        self.jira_client = JiraClient()
+        
+        # ... (中間略)
+
+        self.chat_checkpoints: Dict[str, datetime] = {}
+        
+        # --- [New] 2. 初始化去重快取 ---
+        # 只要記住最近 100 筆處理過的 Message ID 即可
+        # maxlen 會自動讓舊資料被擠出去，不用手動清理
+        self.processed_msg_ids = deque(maxlen=100) 
+        
+        self.is_running = False
+
+    # ... (initialize 方法保持不變) ...
+
+    async def process_message(self, chat_id: str, message: Dict):
+        try:
+            # 1. 基礎解析
+            msg_id = message.get('id')
+            
+            # --- [New] 3. 加入去重檢查 (Deduplication Check) ---
+            if msg_id in self.processed_msg_ids:
+                self.logger.warning(f"Duplicate message detected: {msg_id}. Skipping.")
+                return  # <--- 直接終止，不做任何處理
+
+            # 如果沒處理過，就加入快取 (記住這個 ID)
+            self.processed_msg_ids.append(msg_id)
+            # ------------------------------------------------
+
+            body_data = message.get('body') or {}
+            content = body_data.get('content', '')
+            
+            # ... (後續的 Feedback Check, Self Check, LLM 邏輯全部保持不變) ...
+            
+            # (下略...)
+
+
+
+
+
+# services/memory_store.py
+
+    # ... (前略)
+
+    def get_history_count(self, chat_id: str) -> int:
+        """
+        [New] 取得目前歷史訊息的總數量 (用於判斷硬限制)
+        """
+        return len(self._sessions.get(chat_id, {}).get("history", []))
+
+    def get_recent_history(self, chat_id: str, limit: int = 10) -> List[Dict]:
+        """
+        [New] 取得「最近」的歷史訊息 (軟限制：滑動視窗)
+        :param limit: 要回傳最近幾則訊息 (例如 10 則)
+        """
+        full_history = self.get_history(chat_id)
+        
+        # 如果歷史訊息少於 limit，回傳全部
+        if len(full_history) <= limit:
+            return full_history
+        
+        # 否則只回傳最後 limit 筆 (Python list slicing)
+        return full_history[-limit:]
+
+
+
+
+
+# core/bot_instance.py
+
+    # 定義常數 (或是放在 Config 裡更好)
+    MAX_SESSION_TURNS = 30  # 硬限制：超過 30 則訊息強制歸檔
+    LLM_CONTEXT_WINDOW = 10 # 軟限制：LLM 只看最近 10 則
+
+    async def process_message(self, chat_id: str, message: Dict):
+        try:
+            # ... (前略: 解析、去重、Self Check、圖片下載...)
+            # clean_content = ...
+
+            # --- [邏輯 A: 硬限制 (Hard Limit) 檢查] ---
+            current_count = self.memory.get_history_count(chat_id)
+            
+            if current_count >= self.MAX_SESSION_TURNS:
+                self.logger.warning(f"Session {chat_id} reached limit ({current_count}). Forcing archive.")
+                
+                # 1. 發送通知
+                warning_msg = "⚠️ <b>對話長度已達上限，系統將自動歸檔此對話並開啟新話題。</b>"
+                await self.client.send_reply(chat_id, warning_msg)
+                
+                # 2. 強制歸檔 (這會清空 Memory)
+                await self.archive_session(chat_id, reason="Max Limit Reached")
+                
+                # 3. 重新建立新 Session (讓這次的使用者訊息進入新的 Context)
+                self.memory.create_session(chat_id)
+                self.memory.set_context(chat_id, "model_used", self.llm_engine.model)
+                
+                # 這裡不 return，繼續往下走，把使用者的這則新訊息當作新對話的開始
+            # ----------------------------------------
+
+            # 1. 寫入記憶 (User)
+            self.memory.add_message(chat_id, "user", clean_content, images=image_paths)
+
+            # --- [UX] 發送佔位訊息 ---
+            placeholder_text = "🔍 <b>正在分析您的需求...</b>"
+            processing_msg_id = await self.client.send_reply(chat_id, placeholder_text)
+
+            # --- [邏輯 B: 軟限制 (Sliding Window)] ---
+            # 呼叫 LLM 時，不要拿全部，只拿最近 N 筆
+            recent_history = self.memory.get_recent_history(chat_id, limit=self.LLM_CONTEXT_WINDOW)
+            
+            # 2. 呼叫 LLM Engine
+            # 注意：System Prompt 會由 LLM Engine 補在最前面，所以這裡只切分對話紀錄是安全的
+            markdown_response = await self.llm_engine.generate_response(recent_history, self.system_prompt)
+            
+            # ... (後續: 轉 HTML、更新訊息、寫入 Memory 等保持不變) ...
+
+
+
+
+
+# .dockerignore
+.git
+.venv
+__pycache__
+*.pyc
+.env
+temp_images/
+logs/
+.DS_Store
+
+
+
+
+
+# ----------------------------------------------------------------
+# Stage 1: Builder (負責安裝依賴)
+# ----------------------------------------------------------------
+FROM python:3.11-slim-bookworm AS builder
+
+# 安裝 uv (從官方 image 複製執行檔，最快最穩)
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
+
+# 設定工作目錄
+WORKDIR /app
+
+# 複製依賴定義檔
+COPY pyproject.toml uv.lock ./
+
+# 安裝依賴
+# --frozen: 嚴格依照 uv.lock 安裝
+# --no-dev: 不安裝開發用套件 (如 pytest)
+# --compile: 編譯 byte code 加快啟動速度
+ENV UV_COMPILE_BYTECODE=1
+RUN uv sync --frozen --no-dev
+
+# ----------------------------------------------------------------
+# Stage 2: Runtime (實際執行的環境)
+# ----------------------------------------------------------------
+FROM python:3.11-slim-bookworm
+
+# 安裝基礎工具 (curl 用於 healthcheck, tzdata 用於時區)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl ca-certificates tzdata && \
+    rm -rf /var/lib/apt/lists/*
+
+# 設定時區為台北 (解決 Log 時間與 Azure UTC 差異問題)
+ENV TZ=Asia/Taipei
+
+# 設定工作目錄
+WORKDIR /app
+
+# 從 Builder 階段複製虛擬環境
+# 這裡我們把 builder 建立的 .venv 複製過來，這樣 Runtime image 就不用裝 uv 了，體積更小
+COPY --from=builder /app/.venv /app/.venv
+
+# 複製程式碼
+COPY . .
+
+# 建立必要的資料夾並調整權限
+# 我們建立一個非 root 使用者 'appuser' 來執行程式，提升安全性
+RUN mkdir -p temp_images logs && \
+    adduser --disabled-password --gecos "" appuser && \
+    chown -R appuser:appuser /app
+
+# 切換為非 root 使用者
+USER appuser
+
+# 設定 PATH，讓系統優先使用虛擬環境的 python
+ENV PATH="/app/.venv/bin:$PATH"
+
+# 啟動指令
+CMD ["python", "main.py"]
+
+
+
+
+
+services:
+  teams-bot:
+    build: .
+    container_name: llm-teams-bot
+    restart: always  # 關鍵：如果程式崩潰或伺服器重啟，Docker 會自動重啟它
+    
+    # 載入環境變數 (這是最重要的一步，確保 Token/Secret 不會外洩到 image 裡)
+    env_file:
+      - .env
+    
+    # 掛載 Volumes (讓暫存檔和 Log 可以持久化，方便排錯)
+    volumes:
+      - ./logs:/app/logs
+      - ./temp_images:/app/temp_images
+    
+    # 資源限制 (可選，防止 Bot 吃光伺服器記憶體)
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+
+    # 設定 logging 驅動，避免 log 無限膨脹
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+
+
+
+
+docker compose up -d --build
