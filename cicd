@@ -1,0 +1,90 @@
+# Makefile
+.PHONY: install run clean build push
+
+# 變數定義 (通常 CI 會覆蓋這些，但本地跑要有預設值)
+IMAGE_NAME ?= llm-teams-bot
+TAG ?= latest
+
+# 1. 安裝依賴 (本地開發用)
+install:
+	uv sync
+
+# 2. 本地執行 (開發用)
+run:
+	uv run main.py
+
+# 3. 清理暫存檔
+clean:
+	rm -rf temp_images/ logs/ __pycache__ .pytest_cache
+	find . -type d -name "__pycache__" -exec rm -rf {} +
+
+# 4. Build Docker Image (CI 會呼叫這個，或直接呼叫 docker build)
+build:
+	docker build -t $(IMAGE_NAME):$(TAG) .
+
+# 5. Push Image (手動測試用)
+push:
+	docker push $(IMAGE_NAME):$(TAG)
+
+
+
+stages:
+  - build
+
+variables:
+  # 定義 Image 名稱，通常包含 Commit Hash 以便追蹤版本
+  # CI_REGISTRY_IMAGE 是 GitLab 自動提供的變數，代表目前的專案倉庫位址
+  DOCKER_IMAGE: $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA
+  DOCKER_LATEST: $CI_REGISTRY_IMAGE:latest
+
+# Build 階段：在 Docker 容器內 Build Docker Image (Docker-in-Docker)
+build-image:
+  stage: build
+  image: docker:24-git # 使用含有 docker 指令的環境
+  services:
+    - docker:24-dind   # 啟動 Docker Daemon
+  
+  # 這些變數通常 GitLab 會自動注入，不用手動設，但為了保險起見列出來
+  variables:
+    DOCKER_DRIVER: overlay2
+    DOCKER_TLS_CERTDIR: ""
+
+  before_script:
+    # 登入 GitLab Registry
+    - echo "$CI_REGISTRY_PASSWORD" | docker login $CI_REGISTRY -u $CI_REGISTRY_USER --password-stdin
+
+  script:
+    # 1. 顯示版本資訊 (Debug用)
+    - docker info
+    
+    # 2. Build Image
+    - echo "Building Docker Image: $DOCKER_IMAGE"
+    - docker build -t $DOCKER_IMAGE -t $DOCKER_LATEST .
+    
+    # 3. Push Image
+    - echo "Pushing Docker Image..."
+    - docker push $DOCKER_IMAGE
+    - docker push $DOCKER_LATEST
+
+  # 規則：只在 main 分支有變動時才執行 (避免每個 branch 都 build)
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+
+4. 架構說明與需求書 (Architecture Brief)
+這是最能展現架構師思維的部分。寫一段話告訴 K8s 組這個服務的特性：
+致 K8s 團隊：
+這是一個 Microsoft Teams Chatbot 服務，架構特性如下：
+Polling Mode (主動輪詢)：
+此服務不需要 Ingress，也不需要 Load Balancer。
+它只會對外發出 HTTPS Request (Outbound to Graph API & OpenAI)，不會接收 Inbound Traffic。
+請確保 Egress (外網連線) 暢通。
+Singleton (單例模式)：
+請將 replicas 嚴格限制為 1。
+若啟動多個 Pod，會造成重複讀取訊息 (Race Condition) 與重複回覆。
+Stateful (部分有狀態)：
+它會在 /app/temp_images 寫入暫存圖片。
+目前程式內建定時清理機制，建議使用 emptyDir 或簡單的 PVC 掛載即可。
+Health Check (健康檢查)：
+目前服務為背景 Process，無 HTTP Port 可供 Probe。
+建議監控 Container Process 是否存活即可 (exec probe 或是基本的 Process 監控)。
