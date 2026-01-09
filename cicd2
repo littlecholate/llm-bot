@@ -1,0 +1,139 @@
+# Makefile - Adapted for LLM Teams Bot
+
+# [請修改] 你的應用程式名稱 (對應 GitLab Project Name)
+APP_NAME=llm-teams-bot
+# [請修改] 你的 Harbor Project/Group 名稱 (範例是 ds，請確認是否需要改為 others/it/ai?)
+APP_REPO=ds
+
+# 版本號自動抓取 Git Tag，如果沒有 Tag 則使用 Commit SHA
+VERSION=$(shell git describe --tags --always)
+
+# 組合 Harbor Image 路徑
+DOCKER_IMAGE=$(shell echo $(APP_NAME) | awk '{print "harbor.phison.com/$(APP_REPO)/" $$0 }')
+PROJECT_KEY=$(APP_NAME)
+
+# --- 本地/CI 初始化 ---
+# 因為 CI Runner 可能沒有 uv，我們手動安裝它並同步依賴
+init:
+	pip install uv
+	uv sync
+
+# --- 程式碼品質檢查 ---
+pep8:
+	# 這裡我們直接用 uv run 來執行 flake8，確保使用虛擬環境內的套件
+	uv run flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+	uv run flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+# --- 測試 ---
+test:
+	uv run pytest --cov=app --cov-report xml:./coverage.xml
+
+# --- SonarQube 掃描 (保留範例結構) ---
+sonar-scan:
+	export PATH=$$PATH:/opt/sonar-scanner-4.6.0.2311-linux/bin && \
+	sonar-scanner -Dsonar.projectKey=$(PROJECT_KEY) \
+	-Dsonar.host.url=http://sonarqube.phison.com \
+	-Dsonar.login=$(SONAR_TOKEN) \
+	-Dsonar.projectVersion="$(VERSION)"
+
+# --- Docker Build & Push (開發版) ---
+# 注意：你的 Dockerfile 已經包含 uv 安裝流程，所以這裡不需要改動，直接 build 即可
+# 範例中有 --network host，這在企業內網 Runner 很重要，請保留
+image-dev:
+	docker build -f Dockerfile --network host --build-arg APP_ENV=build-dev -t $(DOCKER_IMAGE):$(VERSION)-dev .
+	docker push $(DOCKER_IMAGE):$(VERSION)-dev
+
+# --- Docker Build & Push (正式版) ---
+image-prd:
+	docker build -f Dockerfile --network host --build-arg APP_ENV=build-prd -t $(DOCKER_IMAGE):$(VERSION) .
+	docker push $(DOCKER_IMAGE):$(VERSION)
+
+
+
+
+
+# .gitlab-ci.yml - Adapted for LLM Teams Bot
+
+# 引入公司共用的 GitOps Template (這部分絕對不能動)
+include:
+  - project: 'DevOps/GitOps/gitops-template'
+    ref: 'master'
+    file: "config/ds-team/group-code-config.yml"
+  - project: 'DevOps/GitOps/gitops-template'
+    ref: 'master'
+    file: "pipeline/ds-team/group-code-pipeline.yml"
+  - template: Security/SAST.gitlab-ci.yml
+
+stages:
+  - variables
+  - check
+  - pep8
+  - test
+  - build
+  - deploy
+  - trigger
+
+# --- 靜態檢查 ---
+pep8-job:
+  stage: pep8
+  image: python:3.11  # [修正] 改為 3.11 以匹配專案
+  script:
+    - pip install uv  # [新增] 安裝 uv
+    - uv sync --dev   # [新增] 安裝開發依賴 (包含 flake8)
+    - make pep8
+  allow_failure: true
+
+# --- 單元測試 (目前註解掉，如果你有寫測試可以打開) ---
+# unit-test-job:
+#   stage: test
+#   image: python:3.11
+#   script:
+#     - make init
+#     - make test
+
+# --- 部署正式版 Image (當打上 git tag 時觸發) ---
+publish-prd:
+  stage: deploy
+  rules:
+    - if: $CI_COMMIT_TAG
+  script:
+    - git checkout $CI_COMMIT_BRANCH
+    - sleep 30
+    - make image-prd
+  dependencies:
+    - assign-variables
+
+# --- 部署開發版 Image (當 push 到 develop 分支時觸發) ---
+publish-dev:
+  stage: deploy
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+  script:
+    - git checkout $CI_COMMIT_BRANCH
+    - sleep 30
+    - make image-dev
+  dependencies:
+    - assign-variables
+
+# --- 安全性掃描 ---
+sast:
+  stage: test
+  image: python:3.11
+
+
+
+
+
+. 修改 Makefile
+​主要修改點：
+​APP_NAME: 改成你的專案名稱。
+​APP_REPO: 預設是 ds，請確認你的 Harbor 專案群組是不是 ds，如果不是請修改。
+​init: 範例是用 pip install -r requirements.txt，但我們是用 uv。為了讓 CI Runner (沒有裝 uv 的環境) 也能跑測試或 lint，我在這裡加上了安裝 uv 的步驟。
+​DOCKER_IMAGE: 針對你們公司的 Harbor 規則進行適配。
+
+2. 修改 .gitlab-ci.yml
+​主要修改點：
+​Image 版本: 範例用 python:3.9，我們必須改成 python:3.11，否則 uv sync 可能會因為 lock file 的 python 版本不符而報錯。
+​pep8-job: 增加 pip install uv，因為 make pep8 裡面我們改成呼叫 uv run flake8。
+​publish-prd / publish-dev: 這些沿用即可，因為它們只是呼叫 make 指令。
+​<!-- end list -->
