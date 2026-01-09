@@ -137,3 +137,91 @@ sast:
 ​pep8-job: 增加 pip install uv，因為 make pep8 裡面我們改成呼叫 uv run flake8。
 ​publish-prd / publish-dev: 這些沿用即可，因為它們只是呼叫 make 指令。
 ​<!-- end list -->
+
+
+
+
+
+
+
+
+
+
+# ----------------------------------------------------------------
+# Stage 1: Builder
+# ----------------------------------------------------------------
+FROM python:3.11-slim-bookworm AS builder
+
+# [修改 1] 接收 Makefile 傳進來的參數 (避免 build warning)
+ARG APP_ENV
+ENV APP_ENV=${APP_ENV}
+
+# [修改 2] 為了適應企業內網，我們改用 pip 安裝 uv
+# 因為 ghcr.io/astral-sh/uv 可能會被防火牆擋住，用 pip 安裝最保險
+RUN pip install uv
+
+WORKDIR /app
+
+# 複製依賴描述檔
+COPY pyproject.toml uv.lock ./
+
+# 安裝依賴
+ENV UV_COMPILE_BYTECODE=1
+# --system 參數讓 uv 直接安裝到系統 Python，這樣 copy 到下一階段比較直觀
+# 或者維持原本的 .venv 方式也可以，這裡沿用 .venv 方式
+RUN uv sync --frozen --no-dev
+
+# ----------------------------------------------------------------
+# Stage 2: Runtime
+# ----------------------------------------------------------------
+FROM python:3.11-slim-bookworm
+
+# [修改 1] 再次接收參數 (ARG 在每個 Stage 是獨立的)
+ARG APP_ENV
+# 將其轉為環境變數，這樣你的 Python 程式可以用 os.getenv('APP_ENV') 讀取
+ENV APP_ENV=${APP_ENV}
+
+# 安裝基礎工具 & 設定時區 (重要：公司 Log 稽核通常要求台北時間)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl ca-certificates tzdata && \
+    rm -rf /var/lib/apt/lists/*
+
+ENV TZ=Asia/Taipei
+
+WORKDIR /app
+
+# 從 Builder 複製虛擬環境
+COPY --from=builder /app/.venv /app/.venv
+
+# 複製程式碼
+COPY . .
+
+# 權限設定 (安全性)
+RUN mkdir -p temp_images logs && \
+    adduser --disabled-password --gecos "" appuser && \
+    chown -R appuser:appuser /app
+
+USER appuser
+
+# 設定 PATH 優先讀取虛擬環境
+ENV PATH="/app/.venv/bin:$PATH"
+
+# 啟動指令
+CMD ["python", "main.py"]
+
+
+
+​新增 ARG APP_ENV 與 ENV APP_ENV=${APP_ENV}
+​原因：你的 Makefile 裡有這一行：
+docker build ... --build-arg APP_ENV=build-dev ...
+​如果不加這行，Docker 會警告 [Warning] One or more build-args were not consumed。
+​加了這行後，你的 Python 程式碼如果不小心需要知道「我現在是 Dev 還是 Prd」，就可以直接讀取環境變數。
+​改用 RUN pip install uv (取代 COPY --from=ghcr.io...)
+​原因：在企業內網的 GitLab Runner 上，有時候會封鎖 ghcr.io (GitHub Container Registry) 或其他外部 Image 來源。
+​但通常公司都會允許 PyPI (透過 Proxy 或 Nexus/Artifactory)。所以用 pip install uv 雖然比直接複製執行檔慢個幾秒鐘，但成功率最高。
+​關於 Base Image (python:3.11-slim-bookworm)
+​注意：如果 CI Pipeline 跑到一半報錯說 toomanyrequests 或 connection timeout 拉不到這個 python image。
+​解法：請詢問 K8s 組：「請問我們公司內部的 Python Base Image 路徑是什麼？」
+​然後把第一行改成類似：FROM harbor.phison.com/dockerhub/python:3.11-slim-bookworm AS builder。
+​這份 Dockerfile 可以直接提交，配合剛剛的 Makefile 應該能一次跑通！
+
