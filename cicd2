@@ -225,3 +225,34 @@ docker build ... --build-arg APP_ENV=build-dev ...
 ​然後把第一行改成類似：FROM harbor.phison.com/dockerhub/python:3.11-slim-bookworm AS builder。
 ​這份 Dockerfile 可以直接提交，配合剛剛的 Makefile 應該能一次跑通！
 
+
+
+
+
+
+​第二階段：正式交差 (Handover to K8s Team)
+​確認 Pipeline 全綠且 Harbor 有東西後，您就可以發信或訊息給 K8s Team 了。
+​請複製以下內容並填空，這份清單包含了他們部署所需的所有資訊：
+​Hi K8s Team,
+​專案 LLM Teams Bot 的 CI/CD Image 建置流程已驗證通過。
+請協助部署至 K8s 環境，詳細資訊如下：
+​1. 專案資訊
+​GitLab Repo: [貼上你的 GitLab 網址]
+​Docker Image: harbor.phison.com/ds/llm-teams-bot:v1.0.0 (已上傳)
+​2. 部署架構要求 (關鍵)
+​Replicas (副本數): 請務必設定為 1 (單例模式)。
+​原因：此服務為 Polling 架構，多個 Pod 會導致重複回覆訊息。
+​資源限制 (Resource Limits):
+​Request: 256Mi Memory / 250m CPU
+​Limit: 512Mi Memory / 1000m CPU
+​網路: 需允許 Outbound 連線至 graph.microsoft.com (Teams) 與 api.openai.com (LLM)。無須 Ingress。
+​3. 環境變數 (Secrets)
+服務啟動需要以下機敏資訊，請協助設定於 K8s Secret：
+​TEAMS_BOT_EMAIL: [填入 Bot 的 Email]
+​TEAMS_BOT_PASSWORD: [填入 Bot 的密碼]
+​OPENAI_API_KEY: [填入 Key]
+​JIRA_API_TOKEN: [填入 Token]
+​JIRA_URL: https://[公司網域].atlassian.net
+​JIRA_EMAIL: [填入 Jira 帳號]
+​TZ: Asia/Taipei (確保 Log 時間正確)
+​謝謝！
