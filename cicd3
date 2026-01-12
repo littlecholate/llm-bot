@@ -1,0 +1,25 @@
+# .gitlab-ci.yml
+
+# ... (前面 include 公司樣板的部分保持不變) ...
+
+# [覆蓋] 修正公司樣板的 check-branch
+check-branch:
+  stage: check
+  script:
+    # 1. Debug: 先把變數印出來，死也要死個明白
+    - echo "Debug Info:"
+    - echo "Project ID: ${CI_PROJECT_ID}"
+    - echo "Commit SHA: ${CI_COMMIT_SHA}"
+    - echo "Commit Tag: ${CI_COMMIT_TAG}" 
+    
+    # 2. [關鍵修改] 將 URL 結尾從 ${CI_COMMIT_TAG} 改為 ${CI_COMMIT_SHA}
+    # 這樣不管是 Branch 還是 Tag 都不會是空的
+    - |
+      curl -f -X GET --header "PRIVATE-TOKEN: ${CV_AGENT_ACCESS_TOKEN}" \
+      "http://192.168.1.154/api/v4/projects/${CI_PROJECT_ID}/repository/commits/${CI_COMMIT_SHA}" \
+      | jq .
+      
+  # 規則：讓它在 Tag 和 Branch 都跑 (或者您可以只限制 Tag)
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH
