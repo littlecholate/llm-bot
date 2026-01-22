@@ -1,0 +1,138 @@
+// main.c
+// MVP: Simple logic flow to demonstrate sequence diagram
+#include <stdio.h>
+
+// 模擬檢查權限的函式
+int check_permission(int user_id) {
+    if (user_id > 0) {
+        return 1; // OK
+    }
+    return 0; // Fail
+}
+
+// 模擬執行核心任務的函式
+void process_data() {
+    printf("Processing data...\n");
+}
+
+// 主程式
+int main() {
+    int user_id = 10;
+    
+    // 這裡的 if-else 邏輯，透過函式呼叫 (Call) 才能被 Sequence Diagram 捕捉
+    if (check_permission(user_id)) {
+        process_data();
+    } else {
+        printf("Access Denied\n");
+    }
+    
+    return 0;
+}
+
+
+
+
+
+[
+  {
+    "directory": "/data",
+    "command": "clang -c main.c -o main.o",
+    "file": "main.c"
+  }
+]
+
+
+
+
+
+# .clang-uml
+compilation_database_dir: .
+output_directory: .
+
+diagrams:
+  logic_flow:
+    type: sequence
+    glob:
+      - main.c
+    include:
+      namespaces:
+        - . # 包含全域命名空間
+    start_from:
+      - function: main
+
+
+
+
+
+# 將當前目錄 ($pwd) 掛載到容器內的 /data
+docker run --rm -v "${PWD}:/data" -w /data bkryza/clang-uml clang-uml
+
+
+
+
+
+// pages/api/generate-uml.js
+// @ts-check
+import { exec } from 'child_process';
+import fs from 'fs/promises';
+import path from 'path';
+import util from 'util';
+
+const execAsync = util.promisify(exec);
+
+/**
+ * MVP: Generate PlantUML from C code
+ * 注意：生產環境必須考慮 Security Sandbox (如 gVisor)，避免執行惡意 C Code。
+ */
+export default async function handler(req, res) {
+  // 1. Error Handling: Basic validation
+  if (req.method !== 'POST' || !req.body.code) {
+    return res.status(400).json({ error: 'Missing C code' });
+  }
+
+  const tempDir = path.join('/tmp', `session_${Date.now()}`); // Linux/Cloud Run path
+  
+  try {
+    // 2. Setup Workspace (Minimum Viable setup)
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(path.join(tempDir, 'main.c'), req.body.code);
+    
+    // 動態生成 compile_commands.json
+    const compileCmd = JSON.stringify([{
+      directory: tempDir,
+      command: "clang -c main.c",
+      file: "main.c"
+    }]);
+    await fs.writeFile(path.join(tempDir, 'compile_commands.json'), compileCmd);
+
+    // 動態生成 .clang-uml
+    const config = `
+compilation_database_dir: .
+output_directory: .
+diagrams:
+  output:
+    type: sequence
+    glob: [main.c]
+    start_from: [{function: "main"}]
+`;
+    await fs.writeFile(path.join(tempDir, '.clang-uml'), config);
+
+    // 3. Execution (Performance Optimization: reuse container if possible, but here we run transient)
+    // 在 Cloud Run 中，你可以直接安裝 clang-uml binary，或者透過 Docker-in-Docker (較慢且複雜)
+    // 建議方案：製作一個包含 Node.js + clang-uml 的 Custom Docker Image 部署到 Cloud Run。
+    
+    await execAsync('clang-uml', { cwd: tempDir });
+
+    // 4. Retrieve Result
+    const puml = await fs.readFile(path.join(tempDir, 'output.puml'), 'utf-8');
+    
+    // 5. Cleanup (Essential for serverless memory limits)
+    await fs.rm(tempDir, { recursive: true, force: true });
+
+    res.status(200).json({ puml });
+
+  } catch (error) {
+    console.error('Generation failed:', error);
+    res.status(500).json({ error: 'Internal Server Error', details: error.message });
+  }
+}
