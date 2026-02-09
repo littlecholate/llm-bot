@@ -76,3 +76,86 @@ async def get_ai_response(user_message):
         ]
     )
     return response
+
+
+
+
+
+
+
+
+import os
+import consul
+from urllib.parse import urlparse
+from dotenv import load_dotenv
+
+# 本地開發先載入 .env
+load_dotenv()
+
+class ConfigManager:
+    def __init__(self):
+        self.consul_client = None
+        self.use_consul = False
+        
+        # [關鍵修改] 從環境變數讀取完整 URL 和 Token
+        # K8s 部署時，請設定這兩個變數
+        consul_url = os.getenv("CONSUL_URL")  # 例如: https://consul.company.com
+        consul_token = os.getenv("CONSUL_HTTP_TOKEN") # 您的 Token
+        
+        # 設定 Key 的前綴 (請依據 K8s Team 給的路徑修改)
+        self.prefix = os.getenv("CONSUL_PATH_PREFIX", "ds/teams-bot/") 
+
+        if consul_url and consul_token:
+            try:
+                # 解析網址
+                parsed_url = urlparse(consul_url)
+                
+                # 自動判斷 Host, Port, Scheme
+                host = parsed_url.hostname
+                scheme = parsed_url.scheme # http 或 https
+                
+                # 如果網址沒寫 Port，依據協定自動決定
+                if parsed_url.port:
+                    port = parsed_url.port
+                else:
+                    port = 443 if scheme == 'https' else 80
+
+                print(f"🔌 Connecting to Consul: {scheme}://{host}:{port}...")
+
+                # [關鍵] 初始化 Client，帶入 Token 和 Scheme
+                self.consul_client = consul.Consul(
+                    host=host,
+                    port=port,
+                    token=consul_token,
+                    scheme=scheme,
+                    verify=False # [注意] 公司內網憑證可能會報錯，先關閉 SSL 驗證比較穩
+                )
+                
+                # 測試連線：隨便讀一個 key 試試看
+                self.consul_client.kv.get(self.prefix)
+                self.use_consul = True
+                print(f"✅ Successfully connected to Consul!")
+                
+            except Exception as e:
+                print(f"⚠️ Failed to connect to Consul: {e}")
+                print("⚠️ Fallback to local .env file.")
+        else:
+             print("ℹ️ No CONSUL_URL/TOKEN provided. Using local .env only.")
+
+    def get(self, key, default=None):
+        """取得設定值 (優先查 Consul)"""
+        if self.use_consul:
+            full_key = f"{self.prefix}{key}"
+            try:
+                index, data = self.consul_client.kv.get(full_key)
+                if data and data['Value']:
+                    return data['Value'].decode('utf-8')
+            except Exception as e:
+                print(f"⚠️ Error reading {key} from Consul: {e}")
+
+        # 如果失敗或沒設定，退回讀取 os.getenv
+        return os.getenv(key, default)
+
+# 建立全域實例
+config = ConfigManager()
+
