@@ -1,0 +1,78 @@
+import os
+import consul
+from dotenv import load_dotenv
+
+# 本地開發先載入 .env
+load_dotenv()
+
+class ConfigManager:
+    def __init__(self):
+        self.consul_client = None
+        self.use_consul = False
+        self.prefix = "ds/teams-bot/"  # [請詢問 K8s Team 正確的前綴]
+
+        # 檢查是否有設定 Consul 的位址 (通常由 K8s 注入環境變數)
+        consul_host = os.getenv("CONSUL_HOST")
+        consul_port = os.getenv("CONSUL_PORT", "8500")
+
+        if consul_host:
+            try:
+                self.consul_client = consul.Consul(host=consul_host, port=int(consul_port))
+                self.use_consul = True
+                print(f"✅ Connected to Consul at {consul_host}:{consul_port}")
+            except Exception as e:
+                print(f"⚠️ Failed to connect to Consul: {e}")
+
+    def get(self, key, default=None, is_dynamic=False):
+        """
+        取得設定值
+        :param key: 變數名稱 (如 TEAMS_BOT_PASSWORD)
+        :param default: 預設值
+        :param is_dynamic: 是否要強制從 Consul 讀取最新值 (True = 每次都問, False = 只讀一次)
+        """
+        # 1. 嘗試從 Consul 讀取
+        if self.use_consul:
+            full_key = f"{self.prefix}{key}"
+            try:
+                # index 是版本號, data 是內容
+                index, data = self.consul_client.kv.get(full_key)
+                if data and data['Value']:
+                    # Consul 存的是 bytes，要轉 string
+                    return data['Value'].decode('utf-8')
+            except Exception as e:
+                print(f"⚠️ Error reading {key} from Consul: {e}")
+
+        # 2. 如果 Consul 沒抓到 (或在本地)，退回讀取環境變數 (.env)
+        return os.getenv(key, default)
+
+# 建立一個全域實例
+config = ConfigManager()
+
+
+
+
+
+from services.config_manager import config  # 匯入剛剛寫的模組
+
+# ...
+# 原本: client_secret = os.getenv("TEAMS_BOT_PASSWORD")
+# 改成:
+client_secret = config.get("TEAMS_BOT_PASSWORD")
+
+
+
+
+
+# 在處理訊息的函式中
+async def get_ai_response(user_message):
+    # 設定 is_dynamic=True，這樣每次對話都會去 Consul 抓最新的 Prompt
+    system_prompt = config.get("SYSTEM_PROMPT", default="你是個好助理", is_dynamic=True)
+    
+    # 呼叫 OpenAI
+    response = await openai.ChatCompletion.create(
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message}
+        ]
+    )
+    return response
