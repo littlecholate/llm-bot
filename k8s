@@ -159,3 +159,112 @@ class ConfigManager:
 # 建立全域實例
 config = ConfigManager()
 
+
+
+
+
+
+# ==============================================================================
+# GitLab MCP Server Deployment (Remote Authorization Mode)
+# ==============================================================================
+# 說明：
+# 1. 此部署啟用 Remote Auth 模式 (REMOTE_AUTHORIZATION="true")。
+# 2. Server 不持有任何 Token，而是驗證 Client 端 HTTP Header 傳入的 Bearer Token。
+# 3. 因此，本部署不需要掛載 GITLAB_PERSONAL_ACCESS_TOKEN 的 Secret。
+# ==============================================================================
+
+---
+# 1. ConfigMap: 定義應用程式環境變數
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gitlab-mcp-config
+  namespace: default # [請 Ops 團隊確認 Namespace]
+data:
+  # [請修改] 貴公司內部的 GitLab API 位置
+  GITLAB_API_URL: "https://gitlab.your-company.com/api/v4"
+  
+  # [關鍵設定] 開啟遠端授權模式
+  # true = Server 啟動時不檢查 Token，而是依賴 Request Header 的 Authorization: Bearer <token>
+  REMOTE_AUTHORIZATION: "true"
+  
+  # [網路設定] 開啟 SSE 模式以提供 HTTP 服務
+  SSE: "true"
+  HOST: "0.0.0.0"
+  PORT: "3000"
+  
+  # [功能設定]
+  GITLAB_READ_ONLY_MODE: "false" # false = 允許 AI 修改代碼/建立 Issue
+  USE_GITLAB_WIKI: "false"
+  USE_MILESTONE: "false"
+  USE_PIPELINE: "true"           # 建議開啟 CI/CD 狀態查詢
+
+---
+# 2. Deployment: 應用程式本體
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gitlab-mcp-server
+  labels:
+    app: gitlab-mcp
+spec:
+  replicas: 1 # 無狀態服務，單一實體即可
+  selector:
+    matchLabels:
+      app: gitlab-mcp
+  template:
+    metadata:
+      labels:
+        app: gitlab-mcp
+    spec:
+      containers:
+        - name: gitlab-mcp
+          # -----------------------------------------------------------
+          # [請修改] 請 Ops 團隊填入推送到公司私有 Registry 的 Image 路徑
+          # 原始 Image: zereight/gitlab-mcp:latest
+          # -----------------------------------------------------------
+          image: registry.your-company.com/internal-tools/gitlab-mcp:latest
+          imagePullPolicy: IfNotPresent
+          
+          ports:
+            - containerPort: 3000
+              name: http-sse
+          
+          # 載入 ConfigMap
+          envFrom:
+            - configMapRef:
+                name: gitlab-mcp-config
+          
+          # 健康檢查 (Liveness Probe)
+          # 確保 SSE Endpoint 有回應 (回應 200 或 401 皆代表服務活著)
+          livenessProbe:
+            httpGet:
+              path: /sse
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+          
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+
+---
+# 3. Service: 內部網路入口
+apiVersion: v1
+kind: Service
+metadata:
+  name: gitlab-mcp-service
+spec:
+  selector:
+    app: gitlab-mcp
+  ports:
+    - protocol: TCP
+      port: 80       # Cluster IP 的 Port (例如: http://gitlab-mcp-service:80)
+      targetPort: 3000
+  type: ClusterIP    # 僅限內部存取
+
