@@ -268,3 +268,23 @@ spec:
       targetPort: 3000
   type: ClusterIP    # 僅限內部存取
 
+
+
+
+
+docker run -d \
+  --name gitlab-mcp-server \
+  --restart unless-stopped \
+  -p 3000:3000 \
+  -e HOST=0.0.0.0 \
+  -e PORT=3000 \
+  -e SSE=true \
+  -e GITLAB_API_URL="https://gitlab.your-company.com/api/v4" \
+  -e GITLAB_PERSONAL_ACCESS_TOKEN="<共用的_SERVICE_ACCOUNT_TOKEN>" \
+  -e GITLAB_READ_ONLY_MODE="false" \
+  -e USE_GITLAB_WIKI="false" \
+  -e USE_MILESTONE="false" \
+  -e USE_PIPELINE="true" \
+  zereight/gitlab-mcp:latest
+
+
